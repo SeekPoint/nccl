@@ -1,5 +1,8 @@
-https://zhuanlan.zhihu.com/p/614746112  ---例子在哪？？？
-NCCL源码解析①：初始化及ncclUniqueId的产生
+NCCL 资料
+NCCL官方说明：
+https://devblogs.nvidia.com/fast-multi-gpu-collectives-nccl/
+https://developer.nvidia.com/nccl
+http://docs.nvidia.com/deeplearning/sdk/nccl-developer-guide/index.html
 
 https://lgd.gd/2021/03/21/NCCL%E6%BA%90%E7%A0%81%E9%98%85%E8%AF%BB%E7%AC%94%E8%AE%B0/
 NCCL源码阅读笔记
@@ -32,6 +35,35 @@ https://zhuanlan.zhihu.com/p/620499558
 NVIDIA NCCL 源码学习（一）- 初始化及ncclUniqueId的产生
 https://zhuanlan.zhihu.com/p/614746112
 
+
+https://blog.csdn.net/weixin_34313182/article/details/92119606
+nvidia-nccl 学习笔记
+NCCL1 vs NCCL2
+nccl1：
+nccl1支持单机多卡通信，不支持多机通信。
+开源地址：https://github.com/NVIDIA/nccl-tests
+nccl2:
+nccl2支持多机通信，在nccl1的基础上增加了多机通信策略。多机通信可进行通信协议的选择，支持通过IB、TCP等协议实现多机间数据通信。
+NCCL2接口
+NCCL 动态扩展
+单机多卡多线程动态扩展
+设计思路：
+采用在线程内各自初始化自己communicator的方法进行初始化（在主线程中创建ncclid，该ncclid对全局线程可见）。当某一个线程调用merge操作失败时，查看是否因为某个线程退出引起的。
+如果因为某个线程退出引起merge失败，这时每个线程重新初始化自己的communicator，并进行上一步的merge操作（该次初始化时device已经减少，相当于重新创建communicator）
+
+测试结论：
+1. 每个线程初始化自己OK
+2. merge操作过程中如果出现某个线程退出，其他线程会处于block状态（不返回）
+结论
+单机多卡（多线程）动态扩展无法支持。
+单机/多机多卡多进程动态扩展
+设计思路：
+采用在进程内各自初始化自己communicator的方法进行初始化（初始化时，0号进程使用tpc协议广播ncclid到全部进程）。当某一个进程调用merge操作失败时，查看是否是因为有进程退出引起的。 如果因为某个进程退出引起merge失败，这时每个进程重新初始化自己的communicator，并进行上一步的merge操作（该次初始化时device已经减少，相当于重新创建communicator）
+
+测试结论： 1. server进程（TCP server端）创建ncclId，并且将该进程bcast到所有work进程（TCP client端），然后进行通信是可以的（server进程可以不参与通信）
+2. merge操作过程中如果出现某个进程退出，其他进程全部处于block状态（不返回），且这时候其他进程的GPU使用率是100%，cpu使用100%。
+结论
+单机／多机多卡多进程动态扩展无法支持。
 
 
 https://www.zhihu.com/question/63219175/answer/206697974

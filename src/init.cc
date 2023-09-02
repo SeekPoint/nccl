@@ -103,6 +103,11 @@ ncclResult_t ncclGetVersion(int* version) {
 NCCL_API(ncclResult_t, ncclGetUniqueId, ncclUniqueId* out);
 
 //UniqueId是怎么产生的
+/*Id 创建
+ * 创建一个被初始化函数（ncclCommInitRank）使用的Id。该函数只能被调用一次（在整个分布式计算中只能被一个地方调用），
+ * 调用后产生的Id需要分发给分布式任务中其他所有的任务，然后在进行ncclCommInitRank初始化操作（该初始化操作需要使用全局统一Id）。
+Generates an Id to be used in ncclCommInitRank. ncclGetUniqueId should be called once and the Id should be distributed to all ranks in the communicator before calling ncclCommInitRank.
+ */
 ncclResult_t ncclGetUniqueId(ncclUniqueId* out) {
   NCCLCHECK(ncclInit());
   NCCLCHECK(PtrCheck(out, "GetUniqueId", "out"));
@@ -1651,6 +1656,22 @@ constexpr nvtxPayloadSchemaEntry_t CommInitRankSchema[] = {
   {0, NVTX_PAYLOAD_ENTRY_TYPE_INT, "CUDA device", nullptr, 0, offsetof(NvtxParamsCommInitRank, cudaDev)},
 };
 
+/*
+ * communicator 初始化
+创建通信组中每个应用的communicator。每个应用在通信过程中需要绑定自己的communicator。
+
+ncclResult_t ncclCommInitRank(ncclComm_t* comm, int nranks, ncclUniqueId commId, int rank)
+多进程/多线程中创建一个新的communicator。
+ 参数重的rank必须是0到nranks-1之间，并且是唯一的。
+ 每个rank应该对应一个已经设置的device。该函数会对每个rank做隐式同步。
+ 该函数必须被不同的进程、线程调用；或者在同一个线程中使用ncclGroupStart/ncclGroupEnd进行限制。
+Creates a new communicator (multi thread/process version).
+ rank must be between 0 and nranks-1 and unique within a communicator clique.
+ Each rank is associated to a CUDA device,
+ which has to be set before calling ncclCommInitRank.
+ ncclCommInitRank implicitly syncronizes with other ranks,
+ so it must be called by different threads/processes or use ncclGroupStart/ncclGroupEnd.
+ */
 NCCL_API(ncclResult_t, ncclCommInitRank, ncclComm_t* newcomm, int nranks, ncclUniqueId commId, int myrank);
 ncclResult_t ncclCommInitRank(ncclComm_t* newcomm, int nranks, ncclUniqueId commId, int myrank) {
   // Load the CUDA driver and dlsym hooks (can fail on old drivers)
@@ -1666,7 +1687,16 @@ ncclResult_t ncclCommInitRank(ncclComm_t* newcomm, int nranks, ncclUniqueId comm
   NCCLCHECK(ncclCommInitRankDev(newcomm, nranks, commId, myrank, cudaDev, &config));
   return ncclSuccess;
 }
-
+/*
+ncclResult_t ncclCommInitAll(ncclComm_t* comm, int ndev, const int* devlist)
+但进程中统一创建communicators，需要预先分配comm地址，并且传入device个数和device列表（该函数在单机通信中使用较方便，多机通信中不使用该函数）。
+> Creates a clique of communicators (single process version).
+ This is a convenience function to create a single-process communicator clique.
+ Returns an array of ndev newly initialized communicators in comm.
+ comm should be pre-allocated with size at least ndev*sizeof(ncclComm_t).
+ If devlist is NULL, the first ndev CUDA devices are used.
+ Order of devlist defines user-order of processors within the communicator.
+ */
 NCCL_API(ncclResult_t, ncclCommInitAll, ncclComm_t* comms, int ndev, const int* devlist);
 ncclResult_t ncclCommInitAll(ncclComm_t* comms, int ndev, const int* devlist) {
   ncclResult_t ret = ncclSuccess;
@@ -1951,6 +1981,8 @@ fail:
   goto exit;
 }
 
+//释放comm资源.
+//Frees resources associated with communicator object
 NCCL_API(ncclResult_t, ncclCommDestroy, ncclComm_t comm);
 ncclResult_t ncclCommDestroy(ncclComm_t comm) {
   if (comm == NULL) {
@@ -2074,7 +2106,8 @@ fail:
   if (newcomm) *newcomm = NULL;
   goto exit;
 }
-
+//获得错误信息结果
+//Returns a human-readable error message
 NCCL_API(const char*, ncclGetErrorString, ncclResult_t code);
 const char* ncclGetErrorString(ncclResult_t code) {
   switch (code) {
@@ -2107,6 +2140,8 @@ ncclResult_t ncclCommGetAsyncError(ncclComm_t comm, ncclResult_t *asyncError) {
   return ncclSuccess;
 }
 
+//获得通信组中全部的rank数
+//Gets the number of ranks in the communicator clique.
 NCCL_API(ncclResult_t, ncclCommCount, const ncclComm_t comm, int* count);
 ncclResult_t ncclCommCount(const ncclComm_t comm, int* count) {
   NVTX3_FUNC_RANGE_IN(nccl_domain);
@@ -2120,7 +2155,8 @@ ncclResult_t ncclCommCount(const ncclComm_t comm, int* count) {
   *count = comm->nRanks;
   return ncclSuccess;
 }
-
+//获得当前通信communicator对应的device
+//Returns the cuda device number associated with the communicator.
 NCCL_API(ncclResult_t, ncclCommCuDevice, const ncclComm_t comm, int* devid);
 ncclResult_t ncclCommCuDevice(const ncclComm_t comm, int* devid) {
   NVTX3_FUNC_RANGE_IN(nccl_domain);
@@ -2133,7 +2169,8 @@ ncclResult_t ncclCommCuDevice(const ncclComm_t comm, int* devid) {
   *devid = comm->cudaDev;
   return ncclSuccess;
 }
-
+//获得当前通信communicator对应的rank值
+//Returns the user-ordered "rank" associated with the communicator.
 NCCL_API(ncclResult_t, ncclCommUserRank, const ncclComm_t comm, int* rank);
 ncclResult_t ncclCommUserRank(const ncclComm_t comm, int* rank) {
   NVTX3_FUNC_RANGE_IN(nccl_domain);
