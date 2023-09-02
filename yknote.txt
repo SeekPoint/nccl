@@ -13,6 +13,7 @@ NVIDIA NCCL 源码学习（六）- channel搜索
 NVIDIA NCCL 源码学习（五）- 路径计算
 NVIDIA NCCL 源码学习（四）- 建图过程
 NVIDIA NCCL 源码学习（三）- 机器内拓扑分析
+https://zhuanlan.zhihu.com/p/625606436
 NVIDIA NCCL 源码学习（二）- bootstrap网络连接的建立
 https://zhuanlan.zhihu.com/p/620499558
 NVIDIA NCCL 源码学习（一）- 初始化及ncclUniqueId的产生

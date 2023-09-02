@@ -591,7 +591,31 @@ static ncclResult_t xmlInitAttrFloat(struct ncclXmlNode* node, const char* attrN
   return ncclSuccess;
 }
 
+/*switch的作用是扩展PCIe端口，下边可以连接设备或者其他switch，上游来的请求被被他转发，PCIe设备可以连在RC，
+ * 也可以连在swtich，一个switch的内部如下所示。
+ 内部有一个PCIe总线 ，然后通过多个Bridge扩展出多个端口，其中上边的那个称为上游端口，其他的叫做下游端口。
 
+前文有提到NCCL中很常用的一个变量名叫busId，比如gpu和ib网卡，注意区分NCCL里的busId并不是指的总线号，
+ 指的其实是定位一个PCIe设备用到的id，即BDF(bus + device + function)，一个bus上有多个设备，
+ 一个设备有多个功能，因此通过BDF就可以定位一个设备，在机器启动完成PCIe的配置之后会将相关信息通过sysfs提供给用户，
+ NCCL就是通过sysfs来完成拓扑检测的。
+
+然后看下执行的ncclTopoGetSystem，这个函数就是本节的重点，会将当前rank的PCI树建立起来，
+ 分为两个步骤，先使用xml表示整个PCI树结构，然后基于xml转成ncclTopoNode，
+ 其中xml定义如下，一个ncclXmlNode表示了PCI树的一个节点。
+
+==============================================================================
+然后开始看拓扑分析的过程。
+
+ 首先通过xmlAddNode创建根节点"system"（后续使用双引号表示xml树节点），
+ 并设置根节点属性"system" ["version"] = NCCL_TOPO_XML_VERSION，
+ 然后遍历每个rank的hosthash，如果相等的话说明在同一个机器，然后执行ncclTopoFillGpu，将gpu加入到xml树。
+
+ 通过ncclTopoGetPciNode获取xml中的有没有创建当前卡的xml node，
+...
+
+ 然后执行ncclTopoGetXmlFromSys，...
+ */
 ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** system) {
   struct ncclXml* xml;
   NCCLCHECK(ncclCalloc(&xml, 1));

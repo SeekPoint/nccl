@@ -287,7 +287,10 @@ ncclResult_t ncclNetInit(struct ncclComm* comm) {
   }
   return ncclSuccess;
 }
-
+/*
+ * 而IB提供了peer memory的接口，使得ib网卡可以访问其他PCIe空间，nv基于peer memory实现了自己的驱动，
+ * 使得rdma可以直接注册显存，这样通信就可以避免host和device的内存拷贝，IB可以直接dma显存，即gdr。
+ */
 ncclResult_t ncclGpuGdrSupport(struct ncclComm* comm, int* gdrSupport) {
   constexpr int GPU_BUF_SIZE = 2*1024*1024;
 #if CUDART_VERSION >= 11030

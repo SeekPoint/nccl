@@ -462,7 +462,10 @@ static void showVersion() {
     shown = 1;
   }
 }
-
+/*获取当前卡的rank，PCIe busId，/dev/shm的设备号，填充到ncclPeerInfo，
+ * 然后通过ncclGpuGdrSupport查看是否支持gdr，rdma在通信前需要注册一段内存，
+ * 使得网卡知道虚拟地址和物理地址的映射，但是如果每次通信都需要将data从显存拷贝到内存再通信的话效率就比较低。
+ * */
 static ncclResult_t fillInfo(struct ncclComm* comm, struct ncclPeerInfo* info, uint64_t commHash) {
   info->rank = comm->rank;
   info->cudaDev = comm->cudaDev;
@@ -750,7 +753,11 @@ fail:
   comm->collNetSupport = 0;
   goto exit;
 }
-
+//由于GPU机器架构是多种多样的，一台机器上可能有多个网卡，多个GPU卡，卡间连接也各不相同，因此需要对机器内设备连接拓扑进行分析，以使性能在各种拓扑结构下都尽可能好。
+/*创建nrank个allGather1Data，然后通过fillInfo 填充当前rank的peerInfo，ncclPeerInfo是rank的一些基本信息，比如rank号，在哪个机器的哪个进程等。
+ *
+ * 然后尝试注册显存，如果可以注册则设置gdrSupport为1，这里其实会创建rdma连接，这个在后边会单独介绍，本次先略过。
+ * */
 static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* parent = NULL) {
   // We use 2 AllGathers
   // 1. { peerInfo, comm, compCap}
