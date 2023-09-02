@@ -389,6 +389,9 @@ ncclResult_t ncclSocketListen(struct ncclSocket* sock) {
 
   /* Put the socket in listen mode
    * NB: The backlog will be silently truncated to the value in /proc/sys/net/core/somaxconn
+创建监听fd，ip由localaddr指定，初始端口为0，bind时随机找一个可用端口，并通过getsockname(sockfd, &localAddr->sa, &size)将ip端口写回到localaddr，这里localaddr就是UniqueId。
+
+到这里UniqueId也就产生了，其实就是当前机器的ip和port。
    */
   SYSCHECK(listen(sock->fd, 16384), "listen");
   sock->state = ncclSocketStateReady;

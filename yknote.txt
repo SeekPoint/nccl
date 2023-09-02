@@ -1,0 +1,38 @@
+https://zhuanlan.zhihu.com/p/614746112  ---例子在哪？？？
+NCCL源码解析①：初始化及ncclUniqueId的产生
+
+https://lgd.gd/2021/03/21/NCCL%E6%BA%90%E7%A0%81%E9%98%85%E8%AF%BB%E7%AC%94%E8%AE%B0/
+NCCL源码阅读笔记
+
+https://blog.csdn.net/kidgin7439/category_11998768.html  和知乎同名的
+NVIDIA NCCL 源码学习（十）- 多机间ncclSend和ncclRecv的过程
+NVIDIA NCCL 源码学习（九）- 单机内ncclSend和ncclRecv的过程
+NVIDIA NCCL 源码学习（八）- 数据通信链路transport的建立
+NVIDIA NCCL 源码学习（七）- 机器间channel连接
+NVIDIA NCCL 源码学习（六）- channel搜索
+NVIDIA NCCL 源码学习（五）- 路径计算
+NVIDIA NCCL 源码学习（四）- 建图过程
+NVIDIA NCCL 源码学习（三）- 机器内拓扑分析
+NVIDIA NCCL 源码学习（二）- bootstrap网络连接的建立
+NVIDIA NCCL 源码学习（一）- 初始化及ncclUniqueId的产生
+https://zhuanlan.zhihu.com/p/614746112
+
+
+
+https://www.zhihu.com/question/63219175/answer/206697974
+如何理解Nvidia英伟达的Multi-GPU多卡通信框架NCCL？
+
+
+https://www.zhihu.com/question/63219175
+如何理解Nvidia英伟达的Multi-GPU多卡通信框架NCCL？
+
+
+
+https://lgd.gd/2021/03/21/NCCL%E6%BA%90%E7%A0%81%E9%98%85%E8%AF%BB%E7%AC%94%E8%AE%B0/
+NCCL源码阅读笔记
+
+NCCL相关笔记
+https://blog.csdn.net/eternal963/article/details/130754512?ops_request_misc=&request_id=&biz_id=102&utm_term=NCCL&utm_medium=distribute.pc_search_result.none-task-blog-2~all~sobaiduweb~default-0-130754512.nonecase&spm=1018.2226.3001.4449
+
+NCCL、OpenMPI、Gloo对比
+https://blog.csdn.net/taoqick/article/details/126449935?ops_request_misc=&request_id=&biz_id=102&utm_term=NCCL&utm_medium=distribute.pc_search_result.none-task-blog-2~all~sobaiduweb~default-7-126449935.nonecase&spm=1018.2226.3001.4449

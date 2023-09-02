@@ -24,6 +24,12 @@ static union ncclSocketAddress bootstrapNetIfAddr;
 static int bootstrapNetInitDone = 0;
 pthread_mutex_t bootstrapNetLock = PTHREAD_MUTEX_INITIALIZER;
 
+/*
+bootstrapNetInit就是bootstrap网络的初始化，主要就是通过findInterfaces遍历机器上所有的网卡信息，通过prefixList匹配选择使用哪些网卡，将可用网卡的信息保存下来，
+ 将ifa_name保存到全局的bootstrapNetIfNames，ip地址保存到全局bootstrapNetIfAddrs，
+ 默认除了docker和lo其他的网卡都可以使用，例如在测试机器上有三张网卡，分别是xgbe0，xgbe1，xgbe2，那么就会把这三个ifaname和对应的ip地址保存下来，
+ 另外nccl提供了环境变量NCCL_SOCKET_IFNAME可以用来指定想用的网卡名，例如通过export NCCL_SOCKET_IFNAME=xgbe0来指定使用xgbe0，其实就是通过prefixList来匹配做到的。
+ */
 ncclResult_t bootstrapNetInit() {
   if (bootstrapNetInitDone == 0) {
     pthread_mutex_lock(&bootstrapNetLock);
@@ -166,6 +172,7 @@ out:
   return NULL;
 }
 
+//然后开始生成UniqueId
 ncclResult_t bootstrapCreateRoot(struct ncclBootstrapHandle* handle, bool idFromEnv) {
   struct ncclSocket* listenSock;
   struct bootstrapRootArgs* args;
