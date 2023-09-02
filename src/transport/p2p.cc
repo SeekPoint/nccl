@@ -13,9 +13,9 @@
 enum p2pType { P2P_DIRECT, P2P_INTERMEDIATE, P2P_IPC, P2P_CUMEM };
 
 struct ncclP2pBuff {
-  void* directPtr;
+  void* directPtr;   // 同进程使用这个字段记录当前rank的数据buffer
   size_t size;
-  ncclIpcDesc ipcDesc;
+  ncclIpcDesc ipcDesc;  // 不同进程的话使用共享显存通信，devIpc记录当前rank的ipc handle
 };
 
 struct p2pConnectInfo {

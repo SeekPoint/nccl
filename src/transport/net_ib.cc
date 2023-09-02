@@ -488,6 +488,8 @@ struct ncclIbGpuFlush {
   struct ibv_qp* qp;
 };
 
+//gpuFlush也对应一个qp，不过这个qp是local的，即他的对端qp就是自己，当开启gdr之后，每次接收数据后都需要执行一下flush，其实是一个rdma read操作，使用网卡读一下接收到的数据的第一个int到hostMem。
+// 官方issue里解释说当通过gdr接收数据完成，产生wc到cpu的时候，接收的数据并不一定在gpu端可以读到，这个时候需要在cpu端执行以下读取。
 struct ncclIbRemFifo {
   struct ncclIbSendFifo elems[MAX_REQUESTS][NCCL_NET_IB_MAX_RECVS];
   uint64_t fifoTail;
@@ -512,7 +514,7 @@ struct ncclIbRecvComm {
 static_assert((offsetof(struct ncclIbRecvComm, remFifo) % 32) == 0, "ncclIbSendComm fifo must be 32-byte aligned");
 
 NCCL_PARAM(IbQpsPerConn, "IB_QPS_PER_CONNECTION", 1);
-
+//ncclIbInitVerbs创建pd和cq，ncclIbVerbs保存了pd和cq
 ncclResult_t ncclIbInitVerbs(int dev, struct ibv_context* ctx, struct ncclIbVerbs* verbs) {
   verbs->dev = dev;
 
@@ -547,7 +549,12 @@ returning:
   pthread_mutex_unlock(&ncclIbDevs[verbs->dev].lock);
   return res;
 }
+/*
+ ncclIbCreateQp用于创建和初始化qp，设置send和recv使用的完成队列，设置qp_type为rc，设置send和recv的最大wr个数，以及每个wr里最多有多少个sge，
+ 然后创建qp，此时这个qp处于RST状态，还无法做任何事情；然后设置qp_state为init，然后设置port和access_flag为IBV_ACCESS_REMOTE_WRITE，
+ 表示qp可以接受远端的写，然后修改qp状态，此时qp就处于INIT状态了，此时qp可以下发recv wr，但是接收到的消息不会被处理。
 
+ */
 ncclResult_t ncclIbCreateQp(uint8_t ib_port, struct ncclIbVerbs* verbs, int access_flags, struct ibv_qp** qp) {
   struct ibv_qp_init_attr qpInitAttr;
   memset(&qpInitAttr, 0, sizeof(struct ibv_qp_init_attr));
@@ -570,7 +577,7 @@ ncclResult_t ncclIbCreateQp(uint8_t ib_port, struct ncclIbVerbs* verbs, int acce
   NCCLCHECK(wrap_ibv_modify_qp(*qp, &qpAttr, IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_ACCESS_FLAGS));
   return ncclSuccess;
 }
-
+//将qp从INIT状态转到RTR状态，设置mtu，对端的qpn，gid和port等信息，这个时候qp可以下发recv消息并正常接收了
 ncclResult_t ncclIbRtrQp(struct ibv_qp* qp, uint32_t qpn, struct ncclIbQpInfo* info) {
   struct ibv_qp_attr qpAttr;
   memset(&qpAttr, 0, sizeof(struct ibv_qp_attr));
@@ -598,7 +605,7 @@ ncclResult_t ncclIbRtrQp(struct ibv_qp* qp, uint32_t qpn, struct ncclIbQpInfo* i
   NCCLCHECK(wrap_ibv_modify_qp(qp, &qpAttr, IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU | IBV_QP_DEST_QPN | IBV_QP_RQ_PSN | IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER));
   return ncclSuccess;
 }
-
+//然后执行，此时qp从状态RTR转为状态RTS，此时qp可以下发send消息正常发送了
 ncclResult_t ncclIbRtsQp(struct ibv_qp* qp) {
   struct ibv_qp_attr qpAttr;
   memset(&qpAttr, 0, sizeof(struct ibv_qp_attr));
@@ -611,6 +618,8 @@ ncclResult_t ncclIbRtsQp(struct ibv_qp* qp) {
   NCCLCHECK(wrap_ibv_modify_qp(qp, &qpAttr, IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT | IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN | IBV_QP_MAX_QP_RD_ATOMIC));
   return ncclSuccess;
 }
+//由于基于socket的建链方式需要通过socket交换发送端和接收端的信息，比如qp number，port，mtu，gid或者lid等，所以这里通过ncclIbListen创建了监听socket，
+// 过程类似bootstrap，fd写到listenComm，ip port写到handle，即connectInfo。
 
 ncclResult_t ncclIbListen(int dev, void* opaqueHandle, void** listenComm) {
   struct ncclIbListenComm* comm;
@@ -626,7 +635,8 @@ ncclResult_t ncclIbListen(int dev, void* opaqueHandle, void** listenComm) {
   *listenComm = comm;
   return ncclSuccess;
 }
-
+//QP初始化好之后就准备通过socket交换发送端和接收端的信息，获取port相关信息，将port，mtu，qpn赋值给qpInfo，然后判断使用的是ib还是roce，roce里lid为0，
+// 只能用gid进行通信，而ib可以使用lid进行通信，最后通过socket将qpInfo发送到接收端，即rank 10。
 ncclResult_t ncclIbConnect(int dev, void* opaqueHandle, void** sendComm) {
   struct ncclIbHandle* handle = (struct ncclIbHandle*) opaqueHandle;
   struct ncclIbCommStage* stage = &handle->stage;
@@ -642,7 +652,7 @@ ncclResult_t ncclIbConnect(int dev, void* opaqueHandle, void** sendComm) {
     WARN("Error: trying to connect already connected sendComm");
     return ncclInternalError;
   }
-
+//ncclIbMalloc分配的是页对齐的内存，包括后边可以看到nccl在注册内存的时候都进行了页对齐，但ibv_reg_mr并不要求内存为页对齐的
   NCCLCHECK(ncclIbMalloc((void**)&comm, sizeof(struct ncclIbSendComm)));
   NCCLCHECK(ncclSocketInit(&comm->sock, &handle->connectAddr, handle->magic, ncclSocketTypeNetIb, NULL, 1));
   stage->comm = comm;
@@ -738,7 +748,7 @@ ib_send_ready:
 }
 
 NCCL_PARAM(IbGdrFlushDisable, "GDR_FLUSH_DISABLE", 0);
-
+//这里fifo也是用来控制发送过程的，后边介绍数据通信再写。
 ncclResult_t ncclIbAccept(void* listenComm, void** recvComm) {
   struct ncclIbListenComm* lComm = (struct ncclIbListenComm*)listenComm;
   struct ncclIbCommStage* stage = &lComm->stage;

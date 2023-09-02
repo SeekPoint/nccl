@@ -16,7 +16,13 @@ struct ncclTransport* ncclTransports[NTRANSPORTS] = {
   &netTransport,
   &collNetTransport
 };
+/*
+ nccl现共有三个transport，P2P通过卡间p2p通信，SHM通过机器内共享的host内存通信，
+ NET通过网络通信，nccl会依次通过这三个transport的canConnect判断是否可用，
+ 然后选择第一个可用的，由于rank 1不在当前机器，因此只有NET的recv可用，
+ 设置connector的transportComm为netTransport的recv。
 
+ */
 template <int type>
 static ncclResult_t selectTransport(struct ncclComm* comm, struct ncclTopoGraph* graph, struct ncclConnect* connect, int channelId, int peer, int connIndex, int* transportType) {
   struct ncclPeerInfo* myInfo = comm->peerInfo+comm->rank;
@@ -64,7 +70,7 @@ void dumpData(struct ncclConnect* data, int ndata) {
     printf("\n");
   }
 }
-
+//接下来接上节介绍下ncclTransportP2pSetup，由于当前rank为10，那么nrecv为1，peerRecv为1，nsend为1，peerSend为9；然后开始创建到1的通信，即通过selectTransport初始化peers[1].recv这个ncclConnector。
 ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* graph, int connIndex, int* highestTransportType/*=NULL*/) {
   // Stream used during transport setup; need for P2P pre-connect + CUDA Graph
   ncclResult_t ret = ncclSuccess;

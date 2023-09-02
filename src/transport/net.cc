@@ -107,17 +107,17 @@ struct sendResources {
 
 struct recvResources {
   struct connectMap map;
-  void* netListenComm;
-  void* netRecvComm;
-  struct ncclSendMem* sendMem;
+  void* netListenComm; // 建链使用的监听comm，如果是ib的话即ncclIbListenComm，保存了监听fd和使用了哪张网卡
+  void* netRecvComm;  // 通信连接上下文信息，如果是ib的话即ncclIbRecvComm，保存了pd，cq等rdma连接信息
+    struct ncclSendMem* sendMem;
   struct ncclRecvMem* recvMem;
 
   int tpRank;
   int tpLocalRank;
   int tpRemoteRank;
   int tpRemoteProxyRank;
-  int netDev;
-  int useGdr;
+    int netDev;  // 用的哪个网卡
+    int useGdr;  // 是否支持gdr
   int useDmaBuf;
   int needFlush;
   int maxRecvs;
@@ -127,9 +127,9 @@ struct recvResources {
   int shared;
   int channelId;
   int connIndex;
-  char* buffers[NCCL_NUM_PROTOCOLS];
-  int buffSizes[NCCL_NUM_PROTOCOLS];
-  void* mhandles[NCCL_NUM_PROTOCOLS];
+  char* buffers[NCCL_NUM_PROTOCOLS]; // buffer地址，三个协议连续存储
+  int buffSizes[NCCL_NUM_PROTOCOLS];  // buffer长度，三个协议的长度和
+  void* mhandles[NCCL_NUM_PROTOCOLS]; // 指向mhandles
   uint64_t step;
   uint64_t llLastCleaning;
 };
@@ -198,7 +198,14 @@ NCCL_PARAM(GdrCopySyncEnable, "GDRCOPY_SYNC_ENABLE", 1);
 // GDRCOPY support: FLUSH_ENABLE When enabled uses a PCI-E read to flush GDRDMA buffers
 NCCL_PARAM(GdrCopyFlushEnable, "GDRCOPY_FLUSH_ENABLE", 0);
 
-/* Setup recv connector */
+/* Setup recv connector
+ *
+ * 首先分配 netRecvResources 赋给ncclConnector，主要字段含义见注释，其中LOC_CONUT为2，表示有两个buffer，
+ * 如果支持gdr，那么会使用第LOC_DEVMEM（1）个buffer，即显存，如果不支持gdr，那么会使用第LOC_HOSTMEM（0）个buffer，
+ * 即锁页内存；sendMem，recvMem记录了fifo的head和tail，用来协调生产者消费者，这个下节具体介绍，本节可忽略；
+ * 用户执行的通信操作比如ncclSend一块数据，nccl会将这块数据分成多个小块流水线发送，step表示第几个小块，这个也在下节具体介绍。
+
+ */
 static ncclResult_t recvSetup(struct ncclComm* comm, struct ncclTopoGraph* graph, struct ncclPeerInfo* myInfo, struct ncclPeerInfo* peerInfo, struct ncclConnect* connectInfo, struct ncclConnector* recv, int channelId, int connIndex) {
   struct setupReq req = { 0 };
   int localRank;
@@ -210,6 +217,10 @@ static ncclResult_t recvSetup(struct ncclComm* comm, struct ncclTopoGraph* graph
   // Use myInfo->rank as the receiver uses its own NIC
   int proxyRank, tpProxyRank;
   NCCLCHECK(ncclTopoGetNetDev(comm, myInfo->rank, graph, channelId, myInfo->rank, &req.netDev, &proxyRank));
+  /*ncclTopoCheckGdr检查选择的网卡和当前rank的gpu是否支持gdr，具体逻辑在第五节中介绍过，这里不再赘述。
+   * 然后为sendMem和recvMem分配锁页内存，设置head和tail；测试机器支持gdr，所以protoLoc均为LOC_DEVMEM，即显存，然后分配三个协议所需的buffer，
+   * 三个协议的buffer连续存储，通过offset记录各自的起始地址，offset保存到conn。mhandles即rdma用的mr，mhandlesProtoc指向mhandles。
+*/
   NCCLCHECK(ncclTopoCheckGdr(comm->topo, myInfo->busId, req.netDev, 0, &req.useGdr));
 
   // Determine whether we need to flush the GDR buffer on recv or not

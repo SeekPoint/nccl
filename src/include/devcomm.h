@@ -81,7 +81,7 @@ static_assert(NCCL_LL_CLEAN_MASK % NCCL_STEPS == 0, "Invalid NCCL_LL_CLEAN_MASK 
 #define NCCL_IPC_WRITE    0x08
 #define NCCL_IPC_READ     0x10
 #define NCCL_NVLS_MIN_POLL 0x20
-
+// ncclConnInfo记录了通信过程上下文信息，本节只需要关注buffs，即通信过程中的buffer，实际位于transportResources，这里只是指针指过去。
 struct ncclConnInfo {
   // Regular comm mechanism
   char *buffs[NCCL_NUM_PROTOCOLS]; // Local for recv, remote for send
@@ -106,7 +106,7 @@ struct ncclProxyConnector {
   int sameProcess;
   struct ncclProxyConnection* connection;
 };
-
+//ncclConnector中connected表示是否完成连接的建立，transportResources为通信过程中用到的buffer，proxyAppend后续介绍数据通信过程再说。
 struct ncclConnector {
   int connected;
   struct ncclProxyConnector proxyConn;
