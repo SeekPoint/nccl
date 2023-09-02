@@ -849,6 +849,8 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
     comm->intraBarrierGate = 0;
   } while(0);
 
+  //NCCL 路径计算的过 程，主要是这三步。
+  //其中 ncclTopoComputePaths 就是执行路径的计算，ncclTopoTrimSystem 是删除用不到的节点，接下来详细看下。
   // Topo detection / System graph creation
   NCCLCHECKGOTO(ncclTopoGetSystem(comm, &comm->topo), ret, fail);
   // Compute paths between GPUs and NICs

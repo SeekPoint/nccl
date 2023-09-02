@@ -49,7 +49,14 @@ extern const char* topoNodeTypeStr[];
 #define LINK_SYS 7
 #define LINK_NET 8
 extern const char* topoLinkTypeStr[];
-
+/*其中 type 为路径的类型，一共有如下几种枚举值。
+ * PATH_LOC 为节点到自己，
+ * PATH_NVL 表示路径上的边都是 NVLink，
+ * PATH_PIX 表示经过最多一个 PCIe switch，
+ * PATH_PXB 表示经过了多个 PCIe witch，但是没有经过 CPU，
+ * PATH_PHB 表示经过了 CPU，
+ * PATH_SYS 表示不同 numa 之间的路径。
+ * */
 // Local (myself)
 #define PATH_LOC 0
 
@@ -80,7 +87,21 @@ extern const char* topoLinkTypeStr[];
 // Disconnected
 #define PATH_DIS 9
 extern const char* topoPathTypeStr[];
+/*
+ 上节 NCCL 完成了对机器 PCI 系统拓扑的建图，其中建好的图如下所示，其中 GPU 之间是通过 NVLink 连接起来的。
 
+为了方便之后的搜索 channel，接下来 NCCL 会先计算 GPU 和 NIC 节点到其他任意节点之间的最优路径，
+ 以及对应的带宽，即最优路径上所有边的带宽的最小值。
+
+那么抽象一下，这个问题可以建模为给定一个无向图，每条边有一个权值，给定查询 (u, v)，求节点 u 到节点 v 的路径，使得路径上的最小边的权值最大，
+ 类似无向图的最小瓶颈路，可以用生成树 + LCA 的方法解决；如果查询中的 u 是固定的，那么也可以使用类似 SPFA 的方法解决，将松弛方法改一下即可。
+
+上节忘记介绍图的数据结构，这里补一下。
+
+图中的边由 ncclTopoLink 表示，type 区分边的类型，比如 NVLink，PCI；width 表示带宽；remNode 表示当前边连接的对端节点。
+
+最后计算出来节点之间的路径由 ncclTopoLinkList 表示，路径一共有 count 条边，这个路径的带宽是 width，即 count 条边中带宽最小为 width，list 为具体的边。
+ */
 struct ncclTopoNode;
 struct ncclTopoLink {
   int type;
@@ -101,7 +122,10 @@ struct ncclTopoLinkList {
 #define NCCL_TOPO_CPU_INTEL_SKL 2
 
 #define NCCL_TOPO_UNDEF (-1)
-
+/*
+每个节点由 ncclTopoNode 表示，nlinks 表示该节点有几条边，links 存储了具体连接的边，
+ paths 存储了到其他节点的路径，node1 中的 paths [type][id] 就是 node1 到 type 类型的第 id 个 node 的路径。
+  */
 struct ncclTopoNode {
   int type;
   int64_t id;
@@ -140,6 +164,7 @@ struct ncclTopoNode {
   uint64_t used;
 };
 
+//ncclTopoNodeSet 表示某种类型的所有节点，比如 GPU，PCI，NIC 等，ncclTopoSystem 存储了全局所有类型的节点。
 struct ncclTopoNodeSet {
   int count;
   struct ncclTopoNode nodes[NCCL_TOPO_MAX_NODES];
