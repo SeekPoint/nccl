@@ -14,6 +14,7 @@
 #include "strongstream.h"
 
 #if CUDART_VERSION < 9000
+//图一中的intraParams和myParams类型都为cudaLaunchParams，通信实际是通过kernel完成的，cudaLaunchParams记录了kernel的参数
 struct cudaLaunchParams {
   void *func;
   dim3 gridDim;

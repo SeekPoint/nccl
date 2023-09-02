@@ -784,6 +784,21 @@ static int nextPow2(int v) {
   return pow2;
 }
 
+//p2p操作对应的channel如何创建出来的
+/*
+ 之前在建立ringGraph的时候有搜索出一系列的环，并根据这些环建立了channel，假设现在一共有nChannels个channel，
+ 而p2p需要p2pnChannels个channel，那么如果p2pnChannels大于nChannles，会再创建p2pnChannels - nChannels个channel，
+ 其他的复用；否则直接复用即可。
+
+对于每个send/recv操作，会使用p2pnChannelsPerPeer个channel并行发送/接收，那么当p2pnChannelsPerPeer比较小，
+ p2pnChannels比较大，会导致只用了前边的几个channel，无法充分利用所有的channel，
+ 举个例子，p2pnChannelsPerPeer = 2，p2pnChannels = 32，rank0和rank1，rank2的通信都会使用channel[1]和channel[2]，
+ 为了解决这个问题，nccl使用数组p2pChannels[p2pnChannelsPerPeer]作为偏移，比如p2pChannels[0] = 0, p2pChannels[1] = 16，
+ 那么rank0和rank1的通信会使用channel[1]和channel[17]，rank0和rank2的通信会使用channel[2]和channel[18]，更充分的利用了channel。
+
+为了方便理解，后续举例时假定p2pnChannels和p2pnChannelsPerPeer都为1。
+
+ */
 ncclResult_t ncclTopoComputeP2pChannels(struct ncclComm* comm) {
   /* here we already honor comm->max/minCTAs for p2pnChannels. */
   if (comm->sharedRes->owner != comm) {
