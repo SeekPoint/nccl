@@ -762,6 +762,24 @@ fail:
 /*创建nrank个allGather1Data，然后通过fillInfo 填充当前rank的peerInfo，ncclPeerInfo是rank的一些基本信息，比如rank号，在哪个机器的哪个进程等。
  *
  * 然后尝试注册显存，如果可以注册则设置gdrSupport为1，这里其实会创建rdma连接，这个在后边会单独介绍，本次先略过。
+
+
+
+initTransportsRank 这个函数对数据传输做了大量的初始化工作。包括：
+
+    建立设备之间的socket连接
+    检测系统里的设备以及设备之间的拓扑结构
+    计算当前系统中的RING、TREE、COLLNET结构
+        CollNet is a new algorithm in NCCL that allows GPUs on multiple nodes to do in-network reductions.
+
+    建立每个设备之间的连接。peer之间的通信方式有三种：
+        p2p transport (uses CUDA direct access between GPUs, using NVLink or PCI.)
+        shared memory transport (using host memory.)
+        net transport (InfiniBand or IP sockets.)
+在ncclTransportP2pSetup() -> selectTransport()中，会选择各个peer之间适用的通信方式。
+对于p2p和shm通信方式，在建立连接后，可以直接进行数据传输（通过GPU peer-to-peer或者host memory），
+而通过network连接的peer，还需要proxy线程来通过socket进行数据传输。
+
  * */
 static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* parent = NULL) {
   // We use 2 AllGathers
@@ -1596,11 +1614,12 @@ static ncclResult_t ncclCommInitRankDev(ncclComm_t* newcomm, int nranks, ncclUni
   ncclComm_t comm = NULL;
   struct ncclCommInitRankAsyncJob *job = NULL;
   char* env = getenv("NCCL_COMM_ID");
-  if (env && myrank == 0) {
+  if (env && myrank == 0) {  //// rank == 0 时,执行bootstrapCreateRoot
     INFO(NCCL_ENV, "NCCL_COMM_ID set by environment to %s", env);
     NCCLCHECKGOTO(bootstrapCreateRoot((struct ncclBootstrapHandle*)&commId, true), res, fail);
   }
 
+  //// 每个rank都要执行
   NCCLCHECKGOTO(ncclInit(), res, fail);
   if (myrank == 0) showVersion();
 
@@ -1671,6 +1690,13 @@ Creates a new communicator (multi thread/process version).
  which has to be set before calling ncclCommInitRank.
  ncclCommInitRank implicitly syncronizes with other ranks,
  so it must be called by different threads/processes or use ncclGroupStart/ncclGroupEnd.
+
+
+ 要使用NCCL进行通信，每个设备上都要有一个NCCL Communicator object。
+ 属于同一个Communicator的各个设备具有相同的ncclUniqueId以及不同的rank。
+ 这个API用于在一个设备上初始化Communicator object。
+ 在设置不同设备上的communicator时，这个API必须被不同的线程/进程调用。
+ 或者使用ncclGroupStart/ncclGroupEnd 来通过一个线程/进程设置多个设备的Communicator。
  */
 NCCL_API(ncclResult_t, ncclCommInitRank, ncclComm_t* newcomm, int nranks, ncclUniqueId commId, int myrank);
 ncclResult_t ncclCommInitRank(ncclComm_t* newcomm, int nranks, ncclUniqueId commId, int myrank) {

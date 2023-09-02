@@ -189,6 +189,7 @@ ncclResult_t bootstrapCreateRoot(struct ncclBootstrapHandle* handle, bool idFrom
   NCCLCHECK(ncclCalloc(&args, 1));
   args->listenSock = listenSock;
   args->magic = handle->magic;
+    // 创建监听线程
   NEQCHECK(pthread_create(&thread, NULL, bootstrapRoot, (void*)args), 0);
   ncclSetThreadName(thread, "NCCL BootstrapR");
   NEQCHECK(pthread_detach(thread), 0); // will not be pthread_join()'d

@@ -431,7 +431,7 @@ class Primitives<
   }
 
  public:
-  __device__ Primitives(
+  __device__ Primitives(  //这个类实现了各类通信原语
       int tid, int nthreads, int const *recvPeers, int const *sendPeers,
       void const *inputBuf, void *outputBuf, uint64_t redOpArg, uint8_t group=0,
       uint8_t connIndexRecv = 0, uint8_t connIndexSend = 0, struct ncclWorkElem* e = nullptr

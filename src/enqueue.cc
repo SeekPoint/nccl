@@ -1565,7 +1565,17 @@ static ncclResult_t taskAppend(struct ncclComm* comm, struct ncclInfo const* inf
   }
   return ncclSuccess;
 }
+/*
+ncclEnqueueCheck 执行了以下操作：
 
+ncclSaveKernel：
+    对将要执行的操作进行一些准备工作。主要是调用computeColl()计算ncclProxyArgs 这个结构体中的信息。
+     这个结构体将被用于初始化Proxy。并且这个函数也计算了将要launch的 CUDA kernel的参数。
+
+ncclBarrierEnqueue ncclBarrierEnqueueWait：
+    launch所有的 CUDA kernel，通过插入barrier的方式设置kernel之间的依赖关系。
+     最后，通过ncclProxyStart() 启动Proxy线程。
+ */
 ncclResult_t ncclEnqueueCheck(struct ncclInfo* info) {
   NCCLCHECK(ncclGroupStartInternal());
   ncclResult_t ret = ncclSuccess;
