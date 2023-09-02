@@ -150,6 +150,12 @@ ncclResult_t ncclTopoRemoveNode(struct ncclTopoSystem* system, int type, int ind
   return ncclSuccess;
 }
 
+/*
+ * 到这里就添加完成了NIC，回到ncclTopoAddPci里，如果是gpu的话则创建gpu node，
+ * 然后设置gpu node的rank，dev，gdr等属性。最后通过ncclTopoConnectNodes建立当前节点到子节点的双向边。
+
+到这里就完成了每个numa节点下的建图，然后开始添加nvlink和QPI以连接，先看下nvlink。
+ */
 ncclResult_t ncclTopoConnectNodes(struct ncclTopoNode* node, struct ncclTopoNode* remNode, int type, float bw) {
   // Aggregate links into higher bw for NVLink
   struct ncclTopoLink* link;
@@ -287,7 +293,9 @@ ncclResult_t ncclTopoPrint(struct ncclTopoSystem* s) {
   NCCLCHECK(ncclTopoPrintPaths(s));
   return ncclSuccess;
 }
-
+//最后为了方便后续搜索channel，通过ncclTopoSort递归将每个PCI节点的边按照nvlink，向下的PCI连接，向上的PCI连接，QPI的顺序进行排序，
+// 因为建边的过程中已经按照带宽排序过，所以nvlink一定在最前边，QPI一定在最后，因此只需要对中间的PCI排序即可。
+// 到这里就完成了整个的建图过程，总结下，由于拓扑分析产出的xml不便于进行后续的路径搜索，所以本节基于xml对PCI系统进行了建图。
 static ncclResult_t ncclTopoSort(struct ncclTopoNode* node, struct ncclTopoNode* upNode) {
   // Shift all links to have upLink as last link
   if (upNode) {
@@ -319,7 +327,7 @@ ncclResult_t ncclTopoSortSystem(struct ncclTopoSystem* system) {
   for (int n=0; n<system->nodes[CPU].count; n++) NCCLCHECK(ncclTopoSort(system->nodes[CPU].nodes+n, NULL));
   return ncclSuccess;
 }
-
+//然后通过建立net node到nic node的正反向边，设置边的类型，边上累计带宽，并且当前节点的边按照带宽从大到小排序。
 ncclResult_t ncclTopoAddNet(struct ncclXmlNode* xmlNet, struct ncclTopoSystem* system, struct ncclTopoNode* nic) {
   int dev;
   NCCLCHECK(xmlGetAttrInt(xmlNet, "dev", &dev));
@@ -374,6 +382,10 @@ struct kvDict kvDictPciGen[] = {
   { "2.5 GT/s", 15 }, { "5 GT/s", 30 }, { "8 GT/s", 60 }, { "16 GT/s", 120 }, { "32 GT/s", 240 }, /* Kernel 5.6 and earlier */
   { "2.5 GT/s PCIe", 15 }, { "5.0 GT/s PCIe", 30 }, { "8.0 GT/s PCIe", 60 }, { "16.0 GT/s PCIe", 120 }, { "32.0 GT/s PCIe", 240 }, { "64.0 GT/s PCIe", 480 },
   { NULL, 60 /* Default fallback */ } }; // x100 Mbps per lane
+  /*首先获取pci的type和busId， 然后判断type，如果是PCI，那么创建一个PCI node，递归执行ncclTopoAddPci，直到遇到NIC或者GPU xml节点。
+
+如果遇到的是NIC，那么创建NIC节点，然后执行ncclTopoAddNic，这里会在xml nic下遍历xml net，对每个xml net创建net node，id为dev，然后设置speed，port，gdr等属性。
+   */
 ncclResult_t ncclTopoAddPci(struct ncclXmlNode* xmlPci, struct ncclTopoSystem* system, struct ncclTopoNode* parent) {
   const char* str;
 
@@ -444,6 +456,10 @@ ncclResult_t ncclTopoAddPci(struct ncclXmlNode* xmlPci, struct ncclTopoSystem* s
 struct kvDict kvDictCpuArch[] = { { "x86_64", NCCL_TOPO_CPU_ARCH_X86 }, { "arm64", NCCL_TOPO_CPU_ARCH_ARM }, { "ppc64", NCCL_TOPO_CPU_ARCH_POWER }, { NULL, 0 } };
 struct kvDict kvDictCpuVendor[] = { { "GenuineIntel", NCCL_TOPO_CPU_VENDOR_INTEL }, { "AuthenticAMD", NCCL_TOPO_CPU_VENDOR_AMD }, { "CentaurHauls", NCCL_TOPO_CPU_VENDOR_ZHAOXIN }, { "  Shanghai  ", NCCL_TOPO_CPU_VENDOR_ZHAOXIN }, { NULL, 0 } };
 
+/*接着创建一个cpu node，id为numaid，设置cpu的affinity，即该numa对应的核，设置cpu对应vendor等信息。
+
+然后遍历cpu node的子节点，根据不同的类型执行不同的函数，如果是PCI节点，则执行ncclTopoAddPci。
+ */
 ncclResult_t ncclTopoAddCpu(struct ncclXmlNode* xmlCpu, struct ncclTopoSystem* system) {
   int numaId;
   NCCLCHECK(xmlGetAttrInt(xmlCpu, "numaid", &numaId));
@@ -488,7 +504,11 @@ ncclResult_t ncclTopoAddCpu(struct ncclXmlNode* xmlCpu, struct ncclTopoSystem* s
   }
   return ncclSuccess;
 }
-
+/*
+ * 从根节点递归遍历下去，直到遇到nvlink xml节点，然后拿到nvlink的父节点，即gpu节点，然后通过tclass获取对端PCI设备类型，
+ * 如果是gpu或者cpu，直接返回对端node，
+ * 如果是nvswitch，那就先创建nvswitch节点，然后创建当前gpu节点和对端的双向边。然后通过ncclTopoConnectCpus将cpu两两连接。
+ */
 ncclResult_t ncclTopoAddNvLinks(struct ncclXmlNode* node, struct ncclTopoSystem* system, const char* parentBusId) {
   if (strcmp(node->name, "nvlink") == 0) {
     struct ncclTopoNode* gpu = NULL;
@@ -539,7 +559,14 @@ ncclResult_t ncclTopoAddNvLinks(struct ncclXmlNode* node, struct ncclTopoSystem*
   }
   return ncclSuccess;
 }
+/*
+上次分析了NCCL对机器PCI系统进行拓扑分析的过程，产出的结果为xml格式，
+ 接下来，NCCL会根据这个xml进图的建立过程以便之后进行路径搜索。
 
+ncclTopoGetSystem的最后会执行ncclTopoGetSystemFromXml将xml格式转成图格式。
+
+ 从xml中拿到根节点"system"，然后遍历子节点中的"cpu"，对每个cpu通过ncclTopoAddCpu进行建图，这里一个cpu其实就是一个numa。
+ */
 ncclResult_t ncclTopoGetSystemFromXml(struct ncclXml* xml, struct ncclTopoSystem** topoSystem) {
   NCCLCHECK(ncclCalloc(topoSystem, 1));
   struct ncclXmlNode* topNode;
