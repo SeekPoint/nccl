@@ -9,6 +9,19 @@ NCCL源码阅读笔记
 
 https://blog.csdn.net/kidgin7439/category_11998768.html  和知乎同名的
 NVIDIA NCCL 源码学习（十）- 多机间ncclSend和ncclRecv的过程
+https://blog.csdn.net/KIDGIN7439/article/details/130936177
+回忆一下单机的执行流程，用户执行ncclSend之后通过ncclEnqueueCheck将sendbuff，sendbytes，peer等信息保存到了comm->p2plist中；
+然后执行ncclGroupEnd，如果发现channel没有建立到peer的链接则先建链，
+然后根据p2plist执行scheduleSendRecv(ncclSaveKernel)将信息保存到channel->collectives，
+然后再启动kernel，kernel会遍历channel->collectives执行send和recv。然后我们看下多机的流程是怎样的。
+
+最后总结下多机通信的整体流程
+
+通信由kernel和proxy线程协调完成，send端kernel负责将数据从input搬运到buf，proxy线程负责将buf中数据通过网络发送给recv端
+kernel和proxy间通过队列实现生产者消费者模式
+send端通过rdma send发送数据，和recv端通过队列实现生产者消费者模式，队列位于send端，recv端每次下发一个wr到rq之后会执行rdma write通知send端
+
+
 NVIDIA NCCL 源码学习（九）- 单机内ncclSend和ncclRecv的过程
 https://blog.csdn.net/KIDGIN7439/article/details/128326053
 单机内的通信都是通过kernel来进行的，所以整个通信的过程可以分为两步，第一步是准备kernel相关的参数，第二步是实际执行kernel的过程。
