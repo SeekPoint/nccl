@@ -10,7 +10,9 @@ NVIDIA NCCL 源码学习（九）- 单机内ncclSend和ncclRecv的过程
 NVIDIA NCCL 源码学习（八）- 数据通信链路transport的建立
 NVIDIA NCCL 源码学习（七）- 机器间channel连接
 NVIDIA NCCL 源码学习（六）- channel搜索
+https://zhuanlan.zhihu.com/p/653440728
 NVIDIA NCCL 源码学习（五）- 路径计算
+https://my.oschina.net/oneflow/blog/10089670
 NVIDIA NCCL 源码学习（四）- 建图过程
 https://zhuanlan.zhihu.com/p/640812018
 NVIDIA NCCL 源码学习（三）- 机器内拓扑分析

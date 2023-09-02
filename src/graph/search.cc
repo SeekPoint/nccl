@@ -33,6 +33,21 @@ static float getTotalBw(struct ncclTopoSystem* system, struct ncclTopoNode* gpu)
   }
   return std::max(pciBw, nvlinkBw);
 }
+
+/*
+ * 上节讲到已经计算出GPU和NIC节点到其他任意节点的最优路径了，本节看下NCCL中channel的搜索过程。
+
+nccl中channel的概念表示一个通信路径，为了更好的利用带宽和网卡，以及同一块数据可以通过多个channel并发通信，
+ 另外后续可以看到一个channel对应了一个GPU SM，
+ 所以基于这些原因，nccl会使用多channel，搜索的过程就是搜索出来一组channel。
+
+如上节所述，单机的情况下会在ncclTopoTrimSystem函数里删除网卡，
+ 因此我们先看下单机八卡这种简化的情况，最后再看下多机引入网卡之后的情况。
+
+
+ ncclTopoSearchInit就是初始化system->maxWidth，如果是单机单卡的情况，那么maxWidth设置为LOC_WIDTH，
+ 否则就遍历每个GPU节点，查看到其他所有GPU节点或者网卡最大带宽。
+ */
 ncclResult_t ncclTopoSearchInit(struct ncclTopoSystem* system) {
   system->maxBw = 0.0;
   system->totalBw = 0.0;
@@ -289,13 +304,19 @@ ncclResult_t ncclTopoReplayGetGpu(struct ncclTopoSystem* system, struct ncclTopo
 }
 
 ncclResult_t ncclTopoSearchRecGpu(struct ncclTopoSystem* system, struct ncclTopoGraph* graph, struct ncclTopoGraph* saveGraph, struct ncclTopoNode* gpu, int step, int backToNet, int backToFirstRank, int forcedOrder, int *time);
-
+//这里会判断下一个点能不能到达，因为type为-1，ncclTopoFollowPath会设置gpu为0号卡，直接执行ncclTopoSearchRecGpu，从0号卡开始搜，step为0。
 ncclResult_t ncclTopoSearchTryGpu(struct ncclTopoSystem* system, struct ncclTopoGraph* graph, struct ncclTopoGraph* saveGraph, int step, int backToNet, int backToFirstRank, int forcedOrder, int *time, int type, int index, int g) {
   const uint64_t flag = 1ULL<<(graph->nChannels);
   struct ncclTopoNode* gpu;
   NCCLCHECK(ncclTopoFollowPath(system, graph, type, index, GPU, g, 1, &gpu));
   if (gpu) {
     gpu->used ^= flag;
+    /*
+     接着递归执行ncclTopoSearchRecGpu，重复上述过程，直到gpu7，这个时候graph->intra中的第一个环是[0,1,2,3,4,5,6,7]，此时step为backToFirstRank，
+     然后通过获取第一个gpu，即gpu0，然后继续执行ncclTopoFollowPath判断7到0是否可达，如果可达的话继续递归执行ncclTopoSearchRecGpu，
+     此时step == ngpus，即搜索到了一个环，那会将现有的graph去更新最优的saveGraph，判断标准主要是看总的带宽，即环的数量乘以speedIntra；
+     如果搜到的环的数量已经达到maxChannel了，则结束本次搜索，否则继续递归执行ncclTopoSearchRec搜索下一个环。
+     */
     NCCLCHECK(ncclTopoSearchRecGpu(system, graph, saveGraph, gpu, step, backToNet, backToFirstRank, forcedOrder, time));
     gpu->used ^= flag;
     NCCLCHECK(ncclTopoFollowPath(system, graph, type, index, GPU, g, -1, &gpu));
@@ -422,7 +443,32 @@ ncclResult_t ncclTopoSelectNets(struct ncclTopoSystem* system, int typeInter, in
 
   return ncclSuccess;
 }
+/*
+然后看下ncclTopoSearchRecGpu，这里会选择下一个节点，先将0号卡节点写入到graph->intra的对应位置；由于当前step是0，因此会在xx行选择下一个GPU，
+next数组表示候选的GPU节点，由于forcedOrder == FORCED_ORDER_PCI，所以候选只有一个，即1号卡，
+ 然后对所有候选执行ncclTopoSearchTryGpu判断这一步是否可行并继续选择下一个节点。
 
+然后回到ncclTopoSearchRec开始尝试判断是否可达1号卡，看下ncclTopoFollowPath，这个函数就是判断能否从type1的index1节点到达type2的index2节点，
+ 这里可以看到之前在选起点的时候type1为-1，因此直接将node设置为type2的index2就返回；这次我们要判断gpu0到gpu1是否可达，获取index1到index2的路径path，
+ 如果index1和index2的类型都是GPU那么speed就设置为graph->speedIntra，
+ 即搜索之前设置的条件，mult是函数的入参，表示需要在path上加还是减去speed，向下搜环的时候需要在path上减去speed，
+ 当回溯回去的时候需要将speed加回去，然后判断path的type是否大于之前设置的type，即graph->typeIntra，大于的话说明不可达，
+ 然后通过followPath将path上的边全都减去speed，如果有边剩下的带宽不够speed，那么通过rewind加回去，此时路径不可达；如果足够的话，则设置node为index2。
+
+
+ ncclTopoSearchTryGpu还是会调用ncclTopoSearchRecGpu，当没有遍历完所有GPU节点时，仍然通过递归执行ncclTopoSearchRecGpu来填充graph->intra，
+ 最后遍历所有GPU之后step等于7，即backToNet，这里首先拿出来起始网卡，即网卡0，如果搜索参数支持crossNic的话就选一个合法的网卡即可，如果不支持的话就判断网卡0是否合法，
+ 合法的话将网卡0填充到graph->inter，一个环就搜索完成了。这里有一个小的疑惑点，在将出口网卡选择好后，并没有将该网卡的带宽减去speed。
+
+
+回到ncclTopoSearchRecNet，接下来会尝试复制刚刚搜索出来的环，当搜索出一个答案后，回到第一次ncclTopoSearchRecNet，
+ 接下来会尝试从离网卡0最近的GPU开始搜索，而不是从GPU0开始，假设为GPUn，这里会先判断GPUn到PCIe switch的双向带宽是否还有空闲，
+ 如果有空闲的话才从GPUn开始搜索。但是和这里的注释表述不太相符，
+ 注释的意思是说不会将一个GPU既用来发送，又用来接收（说这种情况会影响带宽，这一点比较疑惑）
+
+ 到这里就完成了channel的搜索，总结一下，本节就是基于机器拓扑，搜索出一组channel用于数据的通信，并记录到ncclTopoGraph。
+
+ */
 ncclResult_t ncclTopoSearchRecGpu(struct ncclTopoSystem* system, struct ncclTopoGraph* graph, struct ncclTopoGraph* saveGraph, struct ncclTopoNode* gpu, int step, int backToNet, int backToFirstRank, int forcedOrder, int *time) {
   if ((*time) <= 0) return ncclSuccess;
   (*time)--;
@@ -519,6 +565,11 @@ ncclResult_t ncclTopoSearchRecGpu(struct ncclTopoSystem* system, struct ncclTopo
   return ncclSuccess;
 }
 
+/*
+ * ncclTopoSearchRecNet会搜索出来一个答案，这里会遍历每个网卡，
+ * 尝试用每个网卡作为起点搜索环，首先是网卡0，将0写入到inter中第一个channel中，
+ * 然后将网卡0的带宽减去speedInter，maxChannel减去1，然后后边过程和上述很像，会通过ncclTopoSearchTryGpu搜索出一个环。
+ * */
 ncclResult_t ncclTopoSearchRecNet(struct ncclTopoSystem* system, struct ncclTopoGraph* graph, struct ncclTopoGraph* saveGraph, int backToNet, int backToFirstRank, int* time) {
   const int bw = graph->bwInter;
   int* nets;
@@ -637,8 +688,19 @@ ncclResult_t ncclTopoSearchParams(struct ncclTopoSystem* system, int pattern, in
   return ncclSuccess;
 }
 
+/*
+ * 然后开始搜索channel，对于ringGraph来说其实就是搜索出来一系列的环，
+ * 每个rank对应这个环的一个节点，记录了环的prev和next，这里是一个回溯的过程，执行一次ncclTopoSearchRec就会得到一个环，
+ * 执行一次ncclTopoSearchTryGpu看选择出来的下一个点能不能到达，
+ * 执行一次ncclTopoSearchRecGpu用来找下一个GPU，接下来具体看下。
+ *
+然后看下多机场景下，比如两机十六卡场景，这个时候有网卡，所以ncclTopoSearchParams设置参数为backToFirstRank = -1，
+ backToNet = 7，ncclTopoSearchRec直接执行ncclTopoSearchRecNet。
+ * */
 ncclResult_t ncclTopoSearchRec(struct ncclTopoSystem* system, struct ncclTopoGraph* graph, struct ncclTopoGraph* saveGraph, int* time) {
   int backToNet, backToFirstRank;
+  //通过ncclTopoSearchParams设置backToNet和backToFirstRank参数，单机八卡ringGraph场景下这俩参数会分别设置为-1和7，
+  // 此时nchannel为0，执行ncclTopoSearchTryGpu，强制为pci顺序，就是devid的顺序，从dev0开始。
   NCCLCHECK(ncclTopoSearchParams(system, graph->pattern, &backToNet, &backToFirstRank));
   if (system->nodes[NET].count) {
     // Start from NET
@@ -652,9 +714,13 @@ ncclResult_t ncclTopoSearchRec(struct ncclTopoSystem* system, struct ncclTopoGra
       // Try PCI order first
       NCCLCHECK(ncclTopoSearchTryGpu(system, graph, saveGraph, 0, backToNet, backToFirstRank, FORCED_ORDER_PCI, time, -1, -1, 0));
     } else {
+
+        //假设现在开始搜索下一个环，回到ncclTopoSearchRec，接下来会尝试复制刚刚的环，
+        // ncclTopoReplayGetGpu会获取上一个环的第step + 1个gpu，这里其实就是gpu0，然后继续执行ncclTopoSearchTryGpu，这里设置forcedOrder为FORCED_ORDER_REPLAY。
       // Also try to replay previous channel
       int g;
       NCCLCHECK(ncclTopoReplayGetGpu(system, graph, -1, &g));
+      //然后FORCED_ORDER_REPLAY会在寻找下一个节点时通过ncclTopoReplayGetGpu获取上一个环对应step的gpu，因此就是一直在复制上一个环。
       NCCLCHECK(ncclTopoSearchTryGpu(system, graph, saveGraph, 0, backToNet, backToFirstRank, FORCED_ORDER_REPLAY, time, -1, -1, g));
     }
     if (graph->sameChannels == 0 || graph->nChannels == 0) {
@@ -814,6 +880,19 @@ float sm90SpeedArrayInter[] = { 48.0, 45.0, 42.0, 40.0, 30.0, 24.0, 20.0, 17.5, 
 #define NSPEEDSINTRA_SM90 (sizeof(sm90SpeedArrayIntra)/sizeof(float))
 #define NSPEEDSINTER_SM90 (sizeof(sm90SpeedArrayInter)/sizeof(float))
 
+/*ncclTopoGraph记录了搜索到的结果，具体含义见注释。
+
+然后看下ncclTopoCompute，这里就是实际搜索channel的过程，目标是搜索出来尽可能多，带宽尽可能大的一系列channel，
+ 本质就是暴力搜索，先设置一系列的条件搜答案，如果搜不出来则降低条件继续搜。
+
+由于此时没有NET节点，所以crossNic为0，然后初始化graph，首先设置最高的条件，限制节点内部只能使用不超过PATH_NVL路径，
+ 节点间只能使用不超过PATH_PIX的路径，然后通过system-maxWidth设置speedIntra和speedInter，
+ 接着执行ncclTopoSearchRec搜索出一个答案存储到tmpGraph中。
+
+如果此时就是最优的结果，channel数等于maxChannel，并且speedInter也等于maxWidth，则直接退出，
+ 否则就开始逐步降低条件，比如将sameChannel设置为0，允许channel之间不一样；调大typeIntra和typeInter；
+ 允许crossNic；调小speedInter和speedIntra。
+ */
 ncclResult_t ncclTopoCompute(ncclTopoSystem* system, struct ncclTopoGraph* graph) {
   int ngpus = system->nodes[GPU].count;
   graph->crossNic = ncclParamCrossNic();
