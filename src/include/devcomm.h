@@ -117,13 +117,13 @@ struct ncclConnector {
 
 struct ncclRing {
   // Shortcuts for userRanks[1] and userRanks[n-1]
-  int prev;
-  int next;
+  int prev;  // 记录环中当前rank的上一个rank
+  int next;  // 记录环中当前rank的下一个rank
 
   // Maps an internal nccl index to user-specified rank order. This is necessary
   // since we need to know how the user expects data to be ordered across
   // devices. Ordered from current device.
-  int* userRanks;
+  int* userRanks; // 以当前rank为起点记录整个环
 
   int index; // This rank's index in the ring
 };

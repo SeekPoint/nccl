@@ -487,7 +487,7 @@ static ncclResult_t fillInfo(struct ncclComm* comm, struct ncclPeerInfo* info, u
   info->cudaCompCap = comm->minCompCap = comm->maxCompCap = comm->compCap;
   return ncclSuccess;
 }
-
+// 然后从当前rank为起点，将环写到userRanks。
 static ncclResult_t setupChannel(struct ncclComm* comm, int channelId, int rank, int nranks, int* ringRanks) {
   TRACE(NCCL_INIT, "rank %d nranks %d", rank, nranks);
   NCCLCHECK(initChannel(comm, channelId));
@@ -788,6 +788,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   };
 
   int nChannelsOrig;
+  //allGather3Data用于rank间聚合channel的信息，ncclGraphInfo记录了环的信息，比如speed和type
   struct allGatherInfo *allGather3Data = NULL;
   struct ncclTopoRanks** allTopoRanks = NULL;
   int *nodesFirstRank = NULL, *nodesTreePatterns = NULL;
@@ -1083,7 +1084,13 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
 
   // Launch proxy service thread, after this, the proxy calls can be used.
   NCCLCHECKGOTO(ncclProxyCreate(comm), ret, fail);
+/*
+首先获取当前线程的cpu亲和性保存到affinitySave，分配好buffer之后会用affinitySave来恢复亲和性。
 
+然后通过ncclTopoSetAffinity设置cpu亲和性，找到当前rank对应的cpu节点之后，可以获取到该cpu对应的core，即cpuMask，然后获取当前线程对应的亲和性，即mask，
+ 默认会取cpuMask和mask的交集finalMask，如果交集不为空的话，会将finalMask设置给当前线程。
+
+ */
   // Connect with prev/next for each ring
   for (int c=0; c<comm->nChannels; c++) {
     struct ncclChannel* channel = comm->channels+c;
