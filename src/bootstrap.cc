@@ -99,7 +99,10 @@ static ncclResult_t setFilesLimit() {
   SYSCHECK(setrlimit(RLIMIT_NOFILE, &filesLimit), "setrlimit");
   return ncclSuccess;
 }
-
+/*
+ * rank0收到数据后会做什么工作呢，回顾一下，
+ * rank0的节执行ncclGetUniqueId生成ncclUniqueId，
+ * 其中在执行bootstrapCreateRoot的最后会启动一个线程执行bootstrapRoot。*/
 static void *bootstrapRoot(void* rargs) {
   struct bootstrapRootArgs* args = (struct bootstrapRootArgs*)rargs;
   struct ncclSocket* listenSock = args->listenSock;
@@ -219,9 +222,9 @@ struct unexConn {
 };
 
 struct bootstrapState {
-  struct ncclSocket listenSock;
-  struct ncclSocket ringRecvSocket;
-  struct ncclSocket ringSendSocket;
+  struct ncclSocket listenSock; //前节点的监听socket
+  struct ncclSocket ringRecvSocket;  //当前节点和prev节点的socket连接
+  struct ncclSocket ringSendSocket;  //当前节点连接next的socket连接
   union ncclSocketAddress* peerCommAddresses;
   union ncclSocketAddress* peerProxyAddresses;
   struct unexConn* unexpectedConnections;
