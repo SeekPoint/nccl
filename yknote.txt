@@ -7,6 +7,15 @@ http://docs.nvidia.com/deeplearning/sdk/nccl-developer-guide/index.html
 https://blog.csdn.net/litdaguang/article/details/55259389
 Fast Multi-GPU collectives with NCCL-翻译
 
+
+https://zhuanlan.zhihu.com/p/609121884
+【微软】MSCCL Github仓库介绍
+https://github.com/Mellanox/nccl-rdma-sharp-plugins
+nccl-rdma-sharp plugin enables RDMA and Switch based collectives(SHARP) with NVIDIA's NCCL library
+https://docs.nvidia.com/networking/display/HPCXv27/NCCL-RDMA-SHARP+Plugins
+
+AMD的对应 https://github.com/ROCmSoftwarePlatform/rccl
+
 https://lgd.gd/2021/03/21/NCCL%E6%BA%90%E7%A0%81%E9%98%85%E8%AF%BB%E7%AC%94%E8%AE%B0/
 NCCL源码阅读笔记
 代码框架
