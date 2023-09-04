@@ -228,3 +228,13 @@ ncclResult_t ncclSaveKer  最后出现的版本是 v2.8.4-1
 bootstrapNetGetSocketAddr
 最先出现的版本是 v2.4.8-1(没有出现在v2.4.7-1)
 最后出现的版本是 v2.7.8-1(没有出现在v2.8.3-1)
+
+
+ncclResult_t bootstrapCreateRoot(ncclUniqueId* id, bool idFromEnv) {
+  ncclNetHandle_t* netHandle = (ncclNetHandle_t*) id;
+  void* listenComm;
+  NCCLCHECK(bootstrapNetListen(idFromEnv ? dontCareIf : 0, netHandle, &listenComm));
+  pthread_t thread;
+  pthread_create(&thread, NULL, bootstrapRoot, listenComm);
+  return ncclSuccess;
+}

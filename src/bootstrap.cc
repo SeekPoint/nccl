@@ -74,6 +74,11 @@ static ncclResult_t bootstrapNetListen(int dev, ncclNetHandle_t* netHandle, void
   static_assert(sizeof(union socketAddress) < NCCL_NET_HANDLE_MAXSIZE, "union socketAddress size is too large");
   // if dev >= 0, listen based on dev
   if (dev >= 0) {
+      /*
+       通过bootstrapNetGetSocketAddr获取一个可用的ip地址。
+      此时dev是0， bootstrapNetIfs是初始化bootstrap网络的时候一共找到了几个可用的网卡，
+       这里就是获取了第0个可用的ip地址。
+       */
     NCCLCHECK(bootstrapNetGetSocketAddr(dev, connectAddr));
   } else if (dev == findSubnetIf) {
     // handle stores a remote address
@@ -88,7 +93,10 @@ static ncclResult_t bootstrapNetListen(int dev, ncclNetHandle_t* netHandle, void
     memcpy(connectAddr, &localAddr, sizeof(localAddr));
   } // Otherwise, handle stores a local address
   struct bootstrapNetComm* comm;
+  /*然后是通过bootstrapNetNewComm创建bootstrapNetComm，bootstrapNetComm其实就是fd，
+   * bootstrapNetNewComm其实就是new了一个bootstrapNetComm。*/
   NCCLCHECK(bootstrapNetNewComm(&comm));
+  //通过createListenSocket启动socker server。
   NCCLCHECK(createListenSocket(&comm->fd, connectAddr));
   *listenComm = comm;
   return ncclSuccess;
@@ -235,9 +243,11 @@ out:
 }
 
 //然后开始生成UniqueId
-ncclResult_t bootstrapCreateRoot(struct ncclBootstrapHandle* handle, bool idFromEnv) {
-  struct ncclSocket* listenSock;
-  struct bootstrapRootArgs* args;
+ncclResult_t bootstrapCreateRoot(ncclUniqueId* id, bool idFromEnv) {
+    //ncclNetHandle_t也是一个字符数组，然后执行bootstrapNetListen。
+  ncclNetHandle_t* netHandle = (ncclNetHandle_t*) id;
+  void* listenComm;
+  NCCLCHECK(bootstrapNetListen(idFromEnv ? dontCareIf : 0, netHandle, &listenComm));
   pthread_t thread;
 // 创建监听线程
   pthread_create(&thread, NULL, bootstrapRoot, listenComm);

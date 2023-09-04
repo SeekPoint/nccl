@@ -32,7 +32,10 @@ typedef struct {
 }ncclNetProperties_v3_t;
 
 typedef ncclNetProperties_v3_t ncclNetProperties_t;
-
+/*ncclNet_t结构体是一系列的函数指针，比如初始化，发送，接收等；
+ * socket，IB等通信方式都实现了自己的ncclNet_t，如ncclNetSocket，ncclNetIb，
+ * 初始化通信网络的过程就是依次看哪个通信模式可用，然后赋值给全局的ncclNet。
+ * */
 typedef struct {
   // Name of the network (mainly for logs)
   const char* name;

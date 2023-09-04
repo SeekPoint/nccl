@@ -95,14 +95,21 @@ ncclResult_t initNetPlugin(ncclNet_t** net, ncclCollNet_t** collnet) {
   if (netPluginLib != NULL) dlclose(netPluginLib);
   return ncclSuccess;
 }
-
+/*
+ * 用来初始化nccl所需要的网络，包括两个，一个是bootstrap网络，
+ * 外一个是数据通信网络，bootstrap网络主要用于初始化时交换一些简单的信息，
+ * 比如每个机器的ip端口，由于数据量很小，而且主要是在初始化阶段执行一次，
+ * 因此bootstrap使用的是tcp；而通信网络是用于实际数据的传输，因此会优先使用rdma（支持gdr的话会优先使用gdr）
+ * */
 ncclResult_t initNet() {
   // Always initialize bootstrap network
   NCCLCHECK(bootstrapNetInit());
 
+  /*然后开始初始化通信网络。 首先执行initNetPlugin，
+   * 查看是否有libnccl-net.so，测试环境没有这个so，所以直接返回。*/
   NCCLCHECK(initNetPlugin(&ncclNet, &ncclCollNet));
   if (ncclNet != NULL) return ncclSuccess;
-  if (initNet(&ncclNetIb) == ncclSuccess) {
+  if (initNet(&ncclNetIb) == ncclSuccess) { //然后尝试使用IB网络： 首先执行ncclNetIb的init函数，就是ncclIbInit。
     ncclNet = &ncclNetIb;
   } else {
     NCCLCHECK(initNet(&ncclNetSocket));
@@ -115,10 +122,7 @@ NCCL_PARAM(CollNetEnable, "COLLNET_ENABLE", 0);
 
 pthread_mutex_t initLock = PTHREAD_MUTEX_INITIALIZER;
 static bool initialized = false;
-/*用来初始化nccl所需要的网络，包括两个，一个是bootstrap网络，另外一个是数据通信网络，
- * bootstrap网络主要用于初始化时交换一些简单的信息，比如每个机器的ip端口，由于数据量很小，而且主要是在初始化阶段执行一次，因此bootstrap使用的是tcp；
- * 而通信网络是用于实际数据的传输，因此会优先使用rdma（支持gdr的话会优先使用gdr）
-*/
+
 static ncclResult_t ncclInit() {
   if (initialized) return ncclSuccess;
   pthread_mutex_lock(&initLock);

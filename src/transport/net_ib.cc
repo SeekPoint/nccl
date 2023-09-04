@@ -111,15 +111,6 @@ static int ncclIbSpeed(int speed) {
   return ibvSpeeds[firstBitSet(speed, sizeof(ibvSpeeds)/sizeof(int)-1)];
 }
 
-/*
-然后开始初始化通信网络。
-
-ncclNet_t结构体是一系列的函数指针，比如初始化，发送，接收等；socket，IB等通信方式都实现了自己的ncclNet_t，
- 如ncclNetSocket，ncclNetIb，初始化通信网络的过程就是依次看哪个通信模式可用，然后赋值给全局的ncclNet。
-首先执行initNetPlugin，查看是否有libnccl-net.so，测试环境没有这个so，所以直接返回。
-然后尝试使用IB网络：
-首先执行ncclNetIb的init函数，就是ncclIbInit。
- */
 ncclResult_t ncclIbInit(ncclDebugLogger_t logFunction) {
   static int shownIbHcaEnv = 0;
   if(wrap_ibv_symbols() != ncclSuccess) { return ncclInternalError; }
@@ -130,6 +121,7 @@ ncclResult_t ncclIbInit(ncclDebugLogger_t logFunction) {
     wrap_ibv_fork_init();  //通过wrap_ibv_fork_init避免fork引起rdma网卡读写出错。
     if (ncclNIbDevs == -1) {
       ncclNIbDevs = 0;
+      /*后面会讲到ib网络也会用到socket进行带外网络的传输，所以这里也通过findInterfaces获取一个可用的网卡保存到ncclIbIfAddr。*/
       if (findInterfaces(ncclIbIfName, &ncclIbIfAddr, MAX_IF_NAME_SIZE, 1) != 1) {
         WARN("NET/IB : No IP interface found.");
         return ncclInternalError;
@@ -155,6 +147,7 @@ ncclResult_t ncclIbInit(ncclDebugLogger_t logFunction) {
        * 然后将相关信息保存到全局的ncclIbDevs中，比如是哪个device的哪个port，使用的是IB还是ROCE，
        * device的pci路径，maxqp，device的name等，注意这里也有类似bootstrap网络NCCL_SOCKET_IFNAME的环境变量，
        * 叫NCCL_IB_HCA，可以指定使用哪个IB HCA。
+       *
         到这里整个初始化的过程就完成了，一句话总结就是获取了当前机器上所有可用的IB网卡和普通以太网卡然后保存下来。
         然后开始生成UniqueId。`
        * */
