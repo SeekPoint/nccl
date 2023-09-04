@@ -107,6 +107,24 @@ ncclResult_t ncclAsyncColl(ncclComm_t comm) {
   return ncclSuccess;
 }
 
+/*
+组操作
+当在单线程中操作多个GPU时，需要使用组操作进行不同ranks／devices间通信的约束（保证在cpu同步时不冲突）。
+ 通过使用ncclGroupStart 和 ncclGroupEnd，保证组内相同操作的进行。
+ ncclGroupStart将所有的操作放入队列，ncclGroupEnd等待队列中所有操作的完成（在collective操作中ncclGroupEnd只保证把所有的操作都放到cuda stream中，不等待操作完成）。
+ 组操作可以在collective操作和ncclCommInitRank中被使用。
+
+When managing multiple GPUs from a single thread,
+ and since NCCL collective calls may perform inter-CPU synchronization,
+ we need to "group" calls for different ranks/devices into a single call.
+ Grouping NCCL calls as being part of the same collective operation is done using ncclGroupStart and ncclGroupEnd.
+ ncclGroupStart will enqueue all collective calls until the ncclGroupEnd call,
+ which will wait for all calls to be complete.
+ Note that for collective communication, ncclGroupEnd only guarantees that the operations are enqueued on the streams, not that the operation is effectively done. Both collective communication and ncclCommInitRank can be used in conjunction of ncclGroupStart/ncclGroupEnd.
+ */
+
+//组开始操作，其后的操作不使用cpu同步.
+//start a group call. All subsequent calls to NCCL may not block due to inter-CPU synchronization.
 NCCL_API(ncclResult_t, ncclGroupStart);
 ncclResult_t ncclGroupStart() {
   if (ncclGroupMode == 0) {
@@ -142,7 +160,8 @@ void* ncclAsyncThreadPreconnect(void* args_) {
   }
   return args;
 }
-
+//组结束操作，阻塞到所有从ncclGroupStart开始的操作完成在返回.
+//End a group call. Wait for all calls since ncclGroupStart to complete before returning.
 NCCL_API(ncclResult_t, ncclGroupEnd);
 ncclResult_t ncclGroupEnd() {
   if (ncclGroupMode == 0) {

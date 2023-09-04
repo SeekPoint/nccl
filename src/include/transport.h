@@ -40,6 +40,9 @@ struct ncclConnect {
   char data[CONNECT_SIZE];
 };
 
+//定义了一系列的通信相关的函数指针，用户可以自己实现这些接口，
+//ncclTransport 定义了send和recv两个ncclTransportComm，
+//本节会介绍下P2P和NET两个ncclTransport。
 struct ncclTransportComm {
   ncclResult_t (*setup)(struct ncclTopoSystem* topo, struct ncclTopoGraph* graph, struct ncclPeerInfo*, struct ncclPeerInfo*, struct ncclConnect*, struct ncclConnector*, int channelId);
   ncclResult_t (*connect)(struct ncclConnect*, int nranks, int rank, struct ncclConnector*);

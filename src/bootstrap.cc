@@ -23,6 +23,12 @@ static union socketAddress bootstrapNetIfAddrs[MAX_IFS];
 static int bootstrapNetIfs = -1;
 pthread_mutex_t bootstrapNetLock = PTHREAD_MUTEX_INITIALIZER;
 
+/*
+bootstrapNetInit就是bootstrap网络的初始化，主要就是通过findInterfaces遍历机器上所有的网卡信息，通过prefixList匹配选择使用哪些网卡，将可用网卡的信息保存下来，
+ 将ifa_name保存到全局的bootstrapNetIfNames，ip地址保存到全局bootstrapNetIfAddrs，
+ 默认除了docker和lo其他的网卡都可以使用，例如在测试机器上有三张网卡，分别是xgbe0，xgbe1，xgbe2，那么就会把这三个ifaname和对应的ip地址保存下来，
+ 另外nccl提供了环境变量NCCL_SOCKET_IFNAME可以用来指定想用的网卡名，例如通过export NCCL_SOCKET_IFNAME=xgbe0来指定使用xgbe0，其实就是通过prefixList来匹配做到的。
+ */
 ncclResult_t bootstrapNetInit() {
   if (bootstrapNetIfs == -1) {
     pthread_mutex_lock(&bootstrapNetLock);
@@ -163,6 +169,10 @@ static ncclResult_t setFilesLimit() {
   return ncclSuccess;
 }
 
+/*
+ * rank0收到数据后会做什么工作呢，回顾一下，
+ * rank0的节执行ncclGetUniqueId生成ncclUniqueId，
+ * 其中在执行bootstrapCreateRoot的最后会启动一个线程执行bootstrapRoot。*/
 static void *bootstrapRoot(void* listenComm) {
   struct extInfo info;
   ncclNetHandle_t *rankHandles = NULL;
@@ -224,11 +234,12 @@ out:
   return NULL;
 }
 
-ncclResult_t bootstrapCreateRoot(ncclUniqueId* id, bool idFromEnv) {
-  ncclNetHandle_t* netHandle = (ncclNetHandle_t*) id;
-  void* listenComm;
-  NCCLCHECK(bootstrapNetListen(idFromEnv ? dontCareIf : 0, netHandle, &listenComm));
+//然后开始生成UniqueId
+ncclResult_t bootstrapCreateRoot(struct ncclBootstrapHandle* handle, bool idFromEnv) {
+  struct ncclSocket* listenSock;
+  struct bootstrapRootArgs* args;
   pthread_t thread;
+// 创建监听线程
   pthread_create(&thread, NULL, bootstrapRoot, listenComm);
   return ncclSuccess;
 }
@@ -259,9 +270,9 @@ struct unexConn {
 };
 
 struct extState {
-  void* extBstrapListenComm;
-  void* extBstrapRingRecvComm;
-  void* extBstrapRingSendComm;
+  void* extBstrapListenComm;    //前节点的监听socket
+  void* extBstrapRingRecvComm;  //当前节点和prev节点的socket连接
+  void* extBstrapRingSendComm;  //当前节点连接next的socket连接
   ncclNetHandle_t* peerBstrapHandles;
   struct unexConn* unexpectedConnections;
   int rank;

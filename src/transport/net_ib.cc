@@ -111,14 +111,23 @@ static int ncclIbSpeed(int speed) {
   return ibvSpeeds[firstBitSet(speed, sizeof(ibvSpeeds)/sizeof(int)-1)];
 }
 
+/*
+然后开始初始化通信网络。
+
+ncclNet_t结构体是一系列的函数指针，比如初始化，发送，接收等；socket，IB等通信方式都实现了自己的ncclNet_t，
+ 如ncclNetSocket，ncclNetIb，初始化通信网络的过程就是依次看哪个通信模式可用，然后赋值给全局的ncclNet。
+首先执行initNetPlugin，查看是否有libnccl-net.so，测试环境没有这个so，所以直接返回。
+然后尝试使用IB网络：
+首先执行ncclNetIb的init函数，就是ncclIbInit。
+ */
 ncclResult_t ncclIbInit(ncclDebugLogger_t logFunction) {
   static int shownIbHcaEnv = 0;
   if(wrap_ibv_symbols() != ncclSuccess) { return ncclInternalError; }
-  if (ncclParamIbDisable()) return ncclInternalError;
+  if (ncclParamIbDisable()) return ncclInternalError; //通过wrap_ibv_symbols加载动态库libibverbs.so，然后获取动态库的各个函数。
 
   if (ncclNIbDevs == -1) {
     pthread_mutex_lock(&ncclIbLock);
-    wrap_ibv_fork_init();
+    wrap_ibv_fork_init();  //通过wrap_ibv_fork_init避免fork引起rdma网卡读写出错。
     if (ncclNIbDevs == -1) {
       ncclNIbDevs = 0;
       if (findInterfaces(ncclIbIfName, &ncclIbIfAddr, MAX_IF_NAME_SIZE, 1) != 1) {
@@ -140,6 +149,15 @@ ncclResult_t ncclIbInit(ncclDebugLogger_t logFunction) {
       if (searchExact) userIbEnv++;
       int nUserIfs = parseStringList(userIbEnv, userIfs, MAX_IB_DEVS);
 
+      /*
+       * 然后通过ibv_get_device_list获取所有rdma设备到devices中，遍历devices的每个device，
+       * 因为每个HCA可能有多个物理port，所以对每个device遍历每一个物理port，获取每个port的信息，
+       * 然后将相关信息保存到全局的ncclIbDevs中，比如是哪个device的哪个port，使用的是IB还是ROCE，
+       * device的pci路径，maxqp，device的name等，注意这里也有类似bootstrap网络NCCL_SOCKET_IFNAME的环境变量，
+       * 叫NCCL_IB_HCA，可以指定使用哪个IB HCA。
+        到这里整个初始化的过程就完成了，一句话总结就是获取了当前机器上所有可用的IB网卡和普通以太网卡然后保存下来。
+        然后开始生成UniqueId。`
+       * */
       if (ncclSuccess != wrap_ibv_get_device_list(&devices, &nIbDevs)) return ncclInternalError;
 
       for (int d=0; d<nIbDevs && ncclNIbDevs<MAX_IB_DEVS; d++) {
@@ -313,6 +331,10 @@ struct ncclIbGpuFlush {
   struct ibv_qp* qp;
 };
 
+//gpuFlush也对应一个qp，不过这个qp是local的，即他的对端qp就是自己，当开启gdr之后，每次接收数据后都需要执行一下flush，
+//其实是一个rdma read操作，使用网卡读一下接收到的数据的第一个int到hostMem。
+// 官方issue里解释说当通过gdr接收数据完成，产生wc到cpu的时候，接收的数据并不一定在gpu端可以读到，
+//这个时候需要在cpu端执行以下读取。
 struct ncclIbRemFifo {
   struct ncclIbSendFifo elems[MAX_REQUESTS];
   uint64_t addr;
@@ -344,7 +366,14 @@ ncclResult_t ncclIbDestroyVerbs(struct ncclIbVerbs* verbs) {
   NCCLCHECK(wrap_ibv_dealloc_pd(verbs->pd));
   return ncclSuccess;
 }
-
+/*
+ ncclIbCreateQp用于创建和初始化qp，设置send和recv使用的完成队列，设置qp_type为rc，
+ 设置send和recv的最大wr个数，以及每个wr里最多有多少个sge，
+ 然后创建qp，此时这个qp处于RST状态，还无法做任何事情；然后设置qp_state为init，
+ 然后设置port和access_flag为IBV_ACCESS_REMOTE_WRITE，
+ 表示qp可以接受远端的写，然后修改qp状态，此时qp就处于INIT状态了，此时qp可以下发recv wr，
+ 但是接收到的消息不会被处理。
+ */
 ncclResult_t ncclIbCreateQp(uint8_t ib_port, struct ncclIbVerbs* verbs, int access_flags, struct ibv_qp** qp) {
   struct ibv_qp_init_attr qpInitAttr;
   memset(&qpInitAttr, 0, sizeof(struct ibv_qp_init_attr));
@@ -367,7 +396,7 @@ ncclResult_t ncclIbCreateQp(uint8_t ib_port, struct ncclIbVerbs* verbs, int acce
   NCCLCHECK(wrap_ibv_modify_qp(*qp, &qpAttr, IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_ACCESS_FLAGS));
   return ncclSuccess;
 }
-
+//将qp从INIT状态转到RTR状态，设置mtu，对端的qpn，gid和port等信息，这个时候qp可以下发recv消息并正常接收了
 ncclResult_t ncclIbRtrQp(ibv_qp* qp, struct ncclIbQpInfo* info) {
   struct ibv_qp_attr qpAttr;
   memset(&qpAttr, 0, sizeof(struct ibv_qp_attr));
@@ -395,7 +424,7 @@ ncclResult_t ncclIbRtrQp(ibv_qp* qp, struct ncclIbQpInfo* info) {
   NCCLCHECK(wrap_ibv_modify_qp(qp, &qpAttr, IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU | IBV_QP_DEST_QPN | IBV_QP_RQ_PSN | IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER));
   return ncclSuccess;
 }
-
+//然后执行，此时qp从状态RTR转为状态RTS，此时qp可以下发send消息正常发送了
 ncclResult_t ncclIbRtsQp(ibv_qp* qp) {
   struct ibv_qp_attr qpAttr;
   memset(&qpAttr, 0, sizeof(struct ibv_qp_attr));
@@ -408,7 +437,9 @@ ncclResult_t ncclIbRtsQp(ibv_qp* qp) {
   NCCLCHECK(wrap_ibv_modify_qp(qp, &qpAttr, IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT | IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN | IBV_QP_MAX_QP_RD_ATOMIC));
   return ncclSuccess;
 }
-
+//由于基于socket的建链方式需要通过socket交换发送端和接收端的信息，
+//比如qp number，port，mtu，gid或者lid等，所以这里通过ncclIbListen创建了监听socket，
+// 过程类似bootstrap，fd写到listenComm，ip port写到handle，即connectInfo。
 
 ncclResult_t ncclIbListen(int dev, void* opaqueHandle, void** listenComm) {
   struct ncclIbListenComm* comm;
@@ -422,8 +453,13 @@ ncclResult_t ncclIbListen(int dev, void* opaqueHandle, void** listenComm) {
   return ncclSuccess;
 }
 
+//QP初始化好之后就准备通过socket交换发送端和接收端的信息，获取port相关信息，将port，mtu，qpn赋值给qpInfo，
+//然后判断使用的是ib还是roce，roce里lid为0，
+// 只能用gid进行通信，而ib可以使用lid进行通信，最后通过socket将qpInfo发送到接收端，即rank 10。
 ncclResult_t ncclIbConnect(int dev, void* opaqueHandle, void** sendComm) {
   struct ncclIbSendComm* comm;
+//ncclIbMalloc分配的是页对齐的内存，包括后边可以看到nccl在注册内存的时候都进行了页对齐，
+//但ibv_reg_mr并不要求内存为页对齐的
   NCCLCHECK(ncclIbMalloc((void**)&comm, sizeof(struct ncclIbSendComm)));
 
   struct ncclIbHandle* handle = (struct ncclIbHandle*) opaqueHandle;
@@ -466,7 +502,7 @@ ncclResult_t ncclIbConnect(int dev, void* opaqueHandle, void** sendComm) {
 }
 
 NCCL_PARAM(IbGdrFlushDisable, "GDR_FLUSH_DISABLE", 0);
-
+//这里fifo也是用来控制发送过程的，后边介绍数据通信再写。
 ncclResult_t ncclIbAccept(void* listenComm, void** recvComm) {
   struct ncclIbListenComm* lComm = (struct ncclIbListenComm*)listenComm;
   struct ncclIbRecvComm* rComm;

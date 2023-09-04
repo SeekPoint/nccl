@@ -62,15 +62,15 @@ struct ncclTopoGraph {
   int minChannels;
   int maxChannels;
   // Output
-  int nChannels;
-  float speedIntra;
-  float speedInter;
-  int typeIntra;
-  int typeInter;
-  int sameChannels;
-  int nHops;
-  int intra[MAXCHANNELS*NCCL_TOPO_MAX_NODES];
-  int inter[MAXCHANNELS*2];
+  // 搜索到的channel数量
+  float speedIntra;  // 节点内单个channel带宽
+  float speedInter;  // 节点间单个channel带宽
+    int typeIntra;      // 节点内channel的路径类型
+    int typeInter;      // 节点间channel的路径类型
+    int sameChannels;   // channel是否一样
+    int nHops;
+    int intra[MAXCHANNELS*NCCL_TOPO_MAX_NODES];  // 节点内每个channel路径
+    int inter[MAXCHANNELS*2];                    // 节点间每个channel路径
 };
 ncclResult_t ncclTopoCompute(struct ncclTopoSystem* system, struct ncclTopoGraph* graph);
 

@@ -13,6 +13,12 @@
 /********************* Internode connection ***********************/
 /******************************************************************/
 
+/*
+然后开始设置ncclTopoRanks，获取当前rank在ring中的prev和next，其中第一个rank的prev和最后一个rank的next为-1，
+ 如rank6的prev为7，next为3；获取当前ring的ringRecv和ringSend，即ring的第一个节点和最后一个节点，
+ 最后将搜索到的环复制了一遍，这里在官方issue中看到相关解释是为了进一步的并行以充分利用带宽。
+
+ */
 ncclResult_t ncclTopoPreset(struct ncclComm* comm,
     struct ncclTopoGraph* treeGraph, struct ncclTopoGraph* ringGraph, struct ncclTopoGraph* collNetGraph,
     struct ncclTopoRanks* topoRanks) {
@@ -82,7 +88,10 @@ ncclResult_t ncclTopoPreset(struct ncclComm* comm,
   memcpy(channel1, channel0, nChannels*sizeof(struct ncclChannel));
   return ncclSuccess;
 }
-
+//这里将所有channel的prev，next，send，recv信息打平到数组中，例如recv[0]表示第一个ring中rank0的recv是哪个rank，
+//然后开始计算当前机器第一个rank的prev和最后一个rank的next
+//当前机器recv rank的prev就是前一个机器的send rank，当前机器send rank的next就是下一个机器的recv rank。
+//然后执行ncclBuildRings按照大环的顺序依次记录rank到rings
 static ncclResult_t connectRings(struct ncclComm* comm, int* ringRecv, int* ringSend, int* ringPrev, int* ringNext, int* firstRanks) {
   int nChannels = comm->nChannels;
   int nNodes = comm->nNodes;
@@ -253,6 +262,7 @@ int ncclMaxNchannels() {
   return maxNchannels;
 }
 
+//然后开始将每个机器的环首尾相连组成大环。
 ncclResult_t ncclTopoPostset(struct ncclComm* comm, int* firstRanks, struct ncclTopoRanks** allTopoRanks, int* rings) {
   // Gather data from all ranks
   int *ringRecv, *ringSend, *ringPrev, *ringNext, *treeUpRecv, *treeUpSend, *treeDnRecv,*treeDnSend;

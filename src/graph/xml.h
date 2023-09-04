@@ -17,7 +17,9 @@
 #define NODE_TYPE_OPEN 1
 #define NODE_TYPE_CLOSE 2
 #define NODE_TYPE_SINGLE 3
-
+/*ncclXmlNode表示一个节点，记录了父节点和所有子节点，节点有name和attr，通过xmlSetAttr进行设置属性。
+ * ncclXml中预分配了所有的node，maxIndex表示分配到了哪里，然后简单介绍下几个xml相关的api。
+ * */
 struct ncclXmlNode {
   char name[MAX_STR_LEN];
   struct {
@@ -51,7 +53,7 @@ ncclResult_t ncclTopoFillNet(struct ncclXml* xml, const char* pciPath, const cha
 /* XML Struct */
 /* Functions  */
 /**************/
-
+/*xmlGetAttrIndex会查看attrName是node的第几个属性。*/
 static ncclResult_t xmlGetAttrIndex(struct ncclXmlNode* node, const char* attrName, int* index) {
   *index = -1;
   const int nAttrs = node->nAttrs;
@@ -104,7 +106,8 @@ static ncclResult_t xmlFindTag(struct ncclXml* xml, const char* tagName, struct 
   }
   return ncclSuccess;
 }
-
+/*xmlFindTagKv会遍历xml已分配的节点，找到节点名为tagName的节点n，
+然后判断节点n["attrName"]是否等于attrValue，如果相等，则设置node为n。*/
 static ncclResult_t xmlFindTagKv(struct ncclXml* xml, const char* tagName, struct ncclXmlNode** node, const char* attrName, const char* attrValue) {
   *node = NULL;
   for (int i=0; i<xml->maxIndex; i++) {
@@ -186,7 +189,7 @@ static ncclResult_t xmlGetSubKvInt(struct ncclXmlNode* node, const char* subName
   NCCLCHECK(xmlGetSubKv(node, subName, sub, attrName, strValue));
   return ncclSuccess;
 }
-
+/*xmlAddNode进行node的分配，表示在xml里新申请一个节点sub，sub的name设置为subName，父节点为parent。*/
 static ncclResult_t xmlAddNode(struct ncclXml* xml, struct ncclXmlNode* parent, const char* subName, struct ncclXmlNode** sub) {
   if (xml->maxIndex == MAX_NODES) {
     WARN("Error : too many XML nodes (max %d)", MAX_NODES);

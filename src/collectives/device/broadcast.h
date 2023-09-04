@@ -38,15 +38,20 @@ __device__ void ncclBroadcastRingKernel(struct CollectiveArgs* args) {
     ssize_t offset = gridOffset + bid*realChunkSize;
     int nelem = min(realChunkSize, size-offset);
 
-    if (rank == root) {
+    if (rank == root) {  
+	// 如果是root，就要向其他设备广播当前设备buffer中的数据
       if (thisInput == thisOutput) {
         prims.send(thisInput+offset, nelem);
       } else {
         prims.copySend(thisInput+offset, thisOutput+offset, nelem);
       }
+          // 如果不是root，就要从其他节点接收root传来的数据。因为是ring结构，
+          // 所以root发来的数据可能在环上依次传递，并不一定直接接收来自root的数据。
     } else if (nextRank == root) {
+//如果是root之前的最后一个设备，接收即可，不再发送。
       prims.recv(thisOutput+offset, nelem);
     } else {
+// 否则，不仅要receive，还要copy,send.
       prims.recvCopySend(thisOutput+offset, nelem);
     }
   }

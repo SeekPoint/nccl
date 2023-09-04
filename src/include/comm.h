@@ -11,6 +11,7 @@
 #include "p2p.h"
 
 #if CUDART_VERSION < 9000
+//图一中的intraParams和myParams类型都为cudaLaunchParams，通信实际是通过kernel完成的，cudaLaunchParams记录了kernel的参数
 struct cudaLaunchParams {
   void *func;
   dim3 gridDim;
@@ -57,6 +58,13 @@ struct ncclRecvMem {
 };
 
 struct ncclComm {
+/*
+ 然后简单看下ncclChannel数据结构，其中collectives保存了用户向nccl提交的通信操作，
+ 比如ncclSend，ncclRecv等都会向collectives里加一项，ncclColl则保存了这些操作对应的参数；
+ collectives是一个环形队列，所以collStart指向了开始位置，collCount表示队列中操作数量；
+ FifoHead和FifoTail用于协调kernel产出数据和NET发送数据，其实就是生产者消费者，ncclPeer保存了通信相关的信息，后续再具体介绍。
+
+*/
   struct ncclChannel channels[MAXCHANNELS];
 
   struct ncclPeerInfo* peerInfo;

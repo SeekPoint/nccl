@@ -6,7 +6,14 @@
 
 #include "channel.h"
 #include "param.h"
+/*
+然后开始初始化channel，initChannel主要是buffer的分配，分配userRanks和devUserRanks，设置ncclPeer，分配collectives，
+ 因为host和device都会访问collectives这个数据结构，所以需要通过cudaHostAlloc分配host端的锁页内存，
+ 并通过flag cudaHostAllocMapped将其映射到cuda的地址空间。
+ 不过在uva系统上，cudaMallocHost，cudaHostAlloc + cudaHostAllocDefault以及cudaHostAlloc + cudaHostAllocMapped这三种方式没啥区别，
+ host和device都可以访问。
 
+ */
 ncclResult_t initChannel(struct ncclComm* comm, int channelid) {
   struct ncclChannel* channel = comm->channels+channelid;
   if (channel->id != -1) return ncclSuccess;

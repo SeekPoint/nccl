@@ -115,11 +115,15 @@ NCCL_PARAM(CollNetEnable, "COLLNET_ENABLE", 0);
 
 pthread_mutex_t initLock = PTHREAD_MUTEX_INITIALIZER;
 static bool initialized = false;
+/*用来初始化nccl所需要的网络，包括两个，一个是bootstrap网络，另外一个是数据通信网络，
+ * bootstrap网络主要用于初始化时交换一些简单的信息，比如每个机器的ip端口，由于数据量很小，而且主要是在初始化阶段执行一次，因此bootstrap使用的是tcp；
+ * 而通信网络是用于实际数据的传输，因此会优先使用rdma（支持gdr的话会优先使用gdr）
+*/
 static ncclResult_t ncclInit() {
   if (initialized) return ncclSuccess;
   pthread_mutex_lock(&initLock);
   if (!initialized) {
-    initEnv();
+    initEnv(); //设置环境变量。
     NCCLCHECK(initNet());
     INFO(NCCL_INIT, "Using network %s", ncclNetName());
     initialized = true;
@@ -136,6 +140,12 @@ ncclResult_t ncclGetVersion(int* version) {
 }
 
 NCCL_API(ncclResult_t, ncclGetUniqueId, ncclUniqueId* out);
+//UniqueId是怎么产生的
+/*Id 创建
+ * 创建一个被初始化函数（ncclCommInitRank）使用的Id。该函数只能被调用一次（在整个分布式计算中只能被一个地方调用），
+ * 调用后产生的Id需要分发给分布式任务中其他所有的任务，然后在进行ncclCommInitRank初始化操作（该初始化操作需要使用全局统一Id）。
+Generates an Id to be used in ncclCommInitRank. ncclGetUniqueId should be called once and the Id should be distributed to all ranks in the communicator before calling ncclCommInitRank.
+ */
 ncclResult_t ncclGetUniqueId(ncclUniqueId* out) {
   NCCLCHECK(ncclInit());
   NCCLCHECK(PtrCheck(out, "GetUniqueId", "out"));
@@ -281,7 +291,10 @@ static void showVersion() {
     shown = 1;
   }
 }
-
+/*获取当前卡的rank，PCIe busId，/dev/shm的设备号，填充到ncclPeerInfo，
+ * 然后通过ncclGpuGdrSupport查看是否支持gdr，rdma在通信前需要注册一段内存，
+ * 使得网卡知道虚拟地址和物理地址的映射，但是如果每次通信都需要将data从显存拷贝到内存再通信的话效率就比较低。
+ * */
 static ncclResult_t fillInfo(struct ncclComm* comm, struct ncclPeerInfo* info, uint64_t commHash) {
   info->rank = comm->rank;
   CUDACHECK(cudaGetDevice(&info->cudaDev));
@@ -300,7 +313,7 @@ static ncclResult_t fillInfo(struct ncclComm* comm, struct ncclPeerInfo* info, u
   NCCLCHECK(ncclGpuGdrSupport(&info->gdrSupport));
   return ncclSuccess;
 }
-
+// 然后从当前rank为起点，将环写到userRanks。
 static ncclResult_t setupChannel(struct ncclComm* comm, int channelId, int rank, int nranks, int* ringRanks) {
   TRACE(NCCL_INIT, "rank %d nranks %d", rank, nranks);
   NCCLCHECK(initChannel(comm, channelId));
@@ -542,6 +555,29 @@ static ncclResult_t checkCollNetSetup(struct ncclComm* comm, int rank, int collN
 NCCL_PARAM(CrossNic, "CROSS_NIC", 2);
 NCCL_PARAM(GraphDumpFileRank, "GRAPH_DUMP_FILE_RANK", 0);
 
+//由于GPU机器架构是多种多样的，一台机器上可能有多个网卡，多个GPU卡，卡间连接也各不相同，因此需要对机器内设备连接拓扑进行分析，以使性能在各种拓扑结构下都尽可能好。
+/*创建nrank个allGather1Data，然后通过fillInfo 填充当前rank的peerInfo，ncclPeerInfo是rank的一些基本信息，比如rank号，在哪个机器的哪个进程等。
+ *
+ * 然后尝试注册显存，如果可以注册则设置gdrSupport为1，这里其实会创建rdma连接，这个在后边会单独介绍，本次先略过。
+
+
+
+initTransportsRank 这个函数对数据传输做了大量的初始化工作。包括：
+
+    建立设备之间的socket连接
+    检测系统里的设备以及设备之间的拓扑结构
+    计算当前系统中的RING、TREE、COLLNET结构
+        CollNet is a new algorithm in NCCL that allows GPUs on multiple nodes to do in-network reductions.
+
+    建立每个设备之间的连接。peer之间的通信方式有三种：
+        p2p transport (uses CUDA direct access between GPUs, using NVLink or PCI.)
+        shared memory transport (using host memory.)
+        net transport (InfiniBand or IP sockets.)
+在ncclTransportP2pSetup() -> selectTransport()中，会选择各个peer之间适用的通信方式。
+对于p2p和shm通信方式，在建立连接后，可以直接进行数据传输（通过GPU peer-to-peer或者host memory），
+而通过network连接的peer，还需要proxy线程来通过socket进行数据传输。
+
+ * /
 static ncclResult_t initTransportsRank(struct ncclComm* comm, ncclUniqueId* commId) {
   // We use 3 AllGathers
   // 1. { peerInfo, comm }
@@ -577,6 +613,8 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, ncclUniqueId* comm
   // AllGather1 data is used again below
   // AllGather1 - end
 
+  //NCCL 路径计算的过 程，主要是这三步。
+  //其中 ncclTopoComputePaths 就是执行路径的计算，ncclTopoTrimSystem 是删除用不到的节点，接下来详细看下。
   // Topo detection / System graph creation
   NCCLCHECK(ncclTopoGetSystem(comm, &comm->topo));
   // Compute paths between GPUs and NICs
@@ -642,7 +680,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, ncclUniqueId* comm
     struct ncclGraphInfo collNet;
     struct ncclTopoRanks topoRanks;
   } *allGather3Data;
-
+//allGather3Data用于rank间聚合channel的信息，ncclGraphInfo记录了环的信息，比如speed和type
   NCCLCHECK(ncclCalloc(&allGather3Data, nranks));
   allGather3Data[rank].cudaCompCap = ncclCudaCompCap();
   allGather3Data[rank].nChannels = comm->nChannels = treeGraph.nChannels = ringGraph.nChannels =
@@ -759,6 +797,13 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, ncclUniqueId* comm
   // Connect with prev/next for each ring
   struct ncclConnect *connect;
   NCCLCHECKGOTO(ncclCalloc(&connect, 2), ret, affinity_restore);
+/*
+首先获取当前线程的cpu亲和性保存到affinitySave，分配好buffer之后会用affinitySave来恢复亲和性。
+
+然后通过ncclTopoSetAffinity设置cpu亲和性，找到当前rank对应的cpu节点之后，可以获取到该cpu对应的core，即cpuMask，然后获取当前线程对应的亲和性，即mask，
+ 默认会取cpuMask和mask的交集finalMask，如果交集不为空的话，会将finalMask设置给当前线程。
+
+ */
   for (int c=0; c<comm->nChannels; c++) {
     struct ncclChannel* channel = comm->channels+c;
     NCCLCHECKGOTO(setupChannel(comm, c, rank, nranks, rings+c*nranks), ret, affinity_restore);
@@ -831,7 +876,16 @@ affinity_restore:
   TRACE(NCCL_INIT, "rank %d nranks %d - DONE", rank, nranks);
   return ncclSuccess;
 }
-
+}
+/*
+ * rank0节点执行ncclGetUniqueId生成ncclUniqueId，通过mpi将Id广播到所有节点，
+ * 然后所有节点都会执行ncclCommInitRank，这里其他节点也会进行初始化bootstrap网络和通信网络的操作，
+ * 然后会执行到ncclCommInitRankSync。
+ *
+ * ncclComm_t是指向ncclComm的指针，ncclComm是一个大杂烩，包含了通信用到的所有上下文信息，里面的字段等用到的时候再介绍，
+ * 然后通过commAlloc分配newcom，并且完成初始化，比如当前是哪个卡，对应的pcie busid是什么，
+ * 然后执行initTransportsRank
+ * */
 ncclResult_t ncclCommInitRankSync(ncclComm_t* newcomm, int nranks, ncclUniqueId commId, int myrank, int cudaDev) {
   ncclResult_t res;
 
@@ -852,12 +906,13 @@ cleanup:
 static ncclResult_t ncclCommInitRankDev(ncclComm_t* newcomm, int nranks, ncclUniqueId commId, int myrank, int cudaDev) {
   ncclResult_t res;
   char* env = getenv("NCCL_COMM_ID");
-  if (env && myrank == 0) {
+  if (env && myrank == 0) {  //// rank == 0 时,执行bootstrapCreateRoot
     INFO(NCCL_ENV, "NCCL_COMM_ID set by environment to %s", env);
     NCCLCHECKGOTO(bootstrapCreateRoot(&commId, true), res, end);
   }
 
-  NCCLCHECKGOTO(ncclInit(), res, end);
+  //// 每个rank都要执行
+  NCCLCHECKGOTO(ncclInit(), res, fail);
   if (myrank == 0) showVersion();
 
   // Make sure the CUDA runtime is initialized.
@@ -880,6 +935,29 @@ end:
   else return res;
 }
 
+/*
+ * communicator 初始化
+创建通信组中每个应用的communicator。每个应用在通信过程中需要绑定自己的communicator。
+
+ncclResult_t ncclCommInitRank(ncclComm_t* comm, int nranks, ncclUniqueId commId, int rank)
+多进程/多线程中创建一个新的communicator。
+ 参数重的rank必须是0到nranks-1之间，并且是唯一的。
+ 每个rank应该对应一个已经设置的device。该函数会对每个rank做隐式同步。
+ 该函数必须被不同的进程、线程调用；或者在同一个线程中使用ncclGroupStart/ncclGroupEnd进行限制。
+Creates a new communicator (multi thread/process version).
+ rank must be between 0 and nranks-1 and unique within a communicator clique.
+ Each rank is associated to a CUDA device,
+ which has to be set before calling ncclCommInitRank.
+ ncclCommInitRank implicitly syncronizes with other ranks,
+ so it must be called by different threads/processes or use ncclGroupStart/ncclGroupEnd.
+
+
+ 要使用NCCL进行通信，每个设备上都要有一个NCCL Communicator object。
+ 属于同一个Communicator的各个设备具有相同的ncclUniqueId以及不同的rank。
+ 这个API用于在一个设备上初始化Communicator object。
+ 在设置不同设备上的communicator时，这个API必须被不同的线程/进程调用。
+ 或者使用ncclGroupStart/ncclGroupEnd 来通过一个线程/进程设置多个设备的Communicator。
+ */
 NCCL_API(ncclResult_t, ncclCommInitRank, ncclComm_t* newcomm, int nranks, ncclUniqueId commId, int myrank);
 ncclResult_t ncclCommInitRank(ncclComm_t* newcomm, int nranks, ncclUniqueId commId, int myrank) {
   int cudaDev;
@@ -887,7 +965,16 @@ ncclResult_t ncclCommInitRank(ncclComm_t* newcomm, int nranks, ncclUniqueId comm
   NCCLCHECK(ncclCommInitRankDev(newcomm, nranks, commId, myrank, cudaDev));
   return ncclSuccess;
 }
-
+/*
+ncclResult_t ncclCommInitAll(ncclComm_t* comm, int ndev, const int* devlist)
+但进程中统一创建communicators，需要预先分配comm地址，并且传入device个数和device列表（该函数在单机通信中使用较方便，多机通信中不使用该函数）。
+> Creates a clique of communicators (single process version).
+ This is a convenience function to create a single-process communicator clique.
+ Returns an array of ndev newly initialized communicators in comm.
+ comm should be pre-allocated with size at least ndev*sizeof(ncclComm_t).
+ If devlist is NULL, the first ndev CUDA devices are used.
+ Order of devlist defines user-order of processors within the communicator.
+ */
 NCCL_API(ncclResult_t, ncclCommInitAll, ncclComm_t* comms, int ndev, const int* devlist);
 ncclResult_t ncclCommInitAll(ncclComm_t* comms, int ndev, const int* devlist) {
   NCCLCHECK(PtrCheck(comms, "CommInitAll", "comms"));
@@ -933,6 +1020,8 @@ static ncclResult_t commDestroy(ncclComm_t comm) {
   return ncclSuccess;
 }
 
+//释放comm资源.
+//Frees resources associated with communicator object
 NCCL_API(ncclResult_t, ncclCommDestroy, ncclComm_t comm);
 ncclResult_t ncclCommDestroy(ncclComm_t comm) {
   if (comm == NULL)
@@ -960,6 +1049,8 @@ ncclResult_t ncclCommAbort(ncclComm_t comm) {
   return commDestroy(comm);
 }
 
+//获得错误信息结果
+//Returns a human-readable error message
 NCCL_API(const char*, ncclGetErrorString, ncclResult_t code);
 const char* ncclGetErrorString(ncclResult_t code) {
   switch (code) {
@@ -981,6 +1072,8 @@ ncclResult_t ncclCommGetAsyncError(ncclComm_t comm, ncclResult_t *asyncError) {
   return ncclSuccess;
 }
 
+//获得通信组中全部的rank数
+//Gets the number of ranks in the communicator clique.
 NCCL_API(ncclResult_t, ncclCommCount, const ncclComm_t comm, int* count);
 ncclResult_t ncclCommCount(const ncclComm_t comm, int* count) {
   NCCLCHECK(PtrCheck(comm, "CommCount", "comm"));
@@ -988,7 +1081,8 @@ ncclResult_t ncclCommCount(const ncclComm_t comm, int* count) {
   *count = comm->nRanks;
   return ncclSuccess;
 }
-
+//获得当前通信communicator对应的device
+//Returns the cuda device number associated with the communicator.
 NCCL_API(ncclResult_t, ncclCommCuDevice, const ncclComm_t comm, int* devid);
 ncclResult_t ncclCommCuDevice(const ncclComm_t comm, int* devid) {
   NCCLCHECK(PtrCheck(comm, "CommCuDevice", "comm"));
@@ -996,7 +1090,8 @@ ncclResult_t ncclCommCuDevice(const ncclComm_t comm, int* devid) {
   *devid = comm->cudaDev;
   return ncclSuccess;
 }
-
+//获得当前通信communicator对应的rank值
+//Returns the user-ordered "rank" associated with the communicator.
 NCCL_API(ncclResult_t, ncclCommUserRank, const ncclComm_t comm, int* rank);
 ncclResult_t ncclCommUserRank(const ncclComm_t comm, int* rank) {
   NCCLCHECK(PtrCheck(comm, "CommUserRank", "comm"));

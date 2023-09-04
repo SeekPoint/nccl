@@ -18,6 +18,15 @@ struct ncclTopoNodeList {
   int count;
 };
 
+/*
+ * 通过 getPath 获取到 CPU 节点到自己的 path，然后设置 count 为 0，带宽为 LOC_WIDTH，type 为 PATH_LOC。
+
+然后每次从 nodeList 中拿出一个节点 node，获取 node 到 baseNode 的路径 path，
+ 然后用 node 去更新和 node 相连的节点，遍历 node 的边 link，获取 link 对端节点 remNode，
+ 获取 remNode 到 baseNode 的路径 remPath，此时需要比较两个路径哪个更优，一个路径是原来的 remPath，
+ 另一个是 path+link 这个新路径，新路径的带宽 width 是 path 和 link 的带宽取个 min，
+ 如果 width 大于 remPath->width，那么 remPath 更新为 path+link。
+ */
 static ncclResult_t getPath(struct ncclTopoSystem* system, struct ncclTopoNode* node, int t, int64_t id, struct ncclTopoLinkList** path) {
   for (int i=0; i<system->nodes[t].count; i++) {
     if (system->nodes[t].nodes[i].id == id) {
@@ -29,6 +38,13 @@ static ncclResult_t getPath(struct ncclTopoSystem* system, struct ncclTopoNode* 
   return ncclInternalError;
 }
 
+/*路径更新后需要计算 remPath 的 type，这里有个取巧的地方是上节设置边 type 和本节设置路径 type 是对应的，
+ * 比如 LINK_PCI 等于 PATH_PIX，然后可以看到之前说的各种路径的 type 是怎么计算出来的。
+
+首先计算当前 link 作为一条路径的 type，初始化为 link 的 type，比如这个边是 LINK_PCI，那么就是 LINK_PIX，
+ 如果 remPath 的 count 大于 3 的话 type 就会更新为 PATH_PXB（但是这里有个疑问是大于 3 可能也跨过了两个 PCIe switch），
+ 如果 link 有一端是 CPU，那么 type 进一步更新为 PATH_PHB，最后取个 max，remPath->type = std::max (path->type, type)。
+ */
 static ncclResult_t ncclTopoSetPaths(struct ncclTopoNode* baseNode, struct ncclTopoSystem* system) {
   if (baseNode->paths[baseNode->type] == NULL) {
     NCCLCHECK(ncclCalloc(baseNode->paths+baseNode->type, system->nodes[baseNode->type].count));
@@ -238,6 +254,21 @@ ncclResult_t ncclGetLevel(int* level, const char* disableEnv, const char* levelE
   return ncclSuccess;
 }
 
+/*
+ * 然后通过 ncclTopoCheckP2p 检查当前 GPU 节点和其他所有的 GPU 节点之间是否可以使用 p2p 通信，
+ * 其实就是判断 gpu1 到 gpu2 的路径 type 是否满足 p2pLevel 的限制，
+ * 默认 p2pLevel 是 PATH_SYS，如果用户没有通过环境变量设置的话就相当于没有限制，
+ * 任意 gpu 之间都是支持 p2p 通信，另外如果路径类型为 PATH_NVL 的话，那么还支持 p2p read。
+ *
+ *
+ *
+ * 然后判断当前 GPU 和其他 GPU 是否可以通过 shm 通信，因为在 docker 环境中如果 shm 挂载的不一样就无法通信，
+ * 如果无法通过 shm 通信的话就将 path 的 count 设置为 0，
+ * 之后会删除掉对应节点（但是这里有个疑问，shm 不通的话为什么没有继续判断 p2p 是否可用）。
+
+最后类似 GPU，然后对所有的 NIC 执行 ncclTopoSetPaths 计算出路径，
+ 然后遍历每个 NIC 和每个 GPU，判断是否支持 gdr。
+ * */
 int ncclTopoUserP2pLevel = -1;
 ncclResult_t ncclTopoCheckP2p(struct ncclTopoSystem* system, int64_t id1, int64_t id2, int* p2p, int *read) {
   *p2p = 0;
@@ -288,7 +319,30 @@ compare:
 
 NCCL_PARAM(NetGdrRead, "NET_GDR_READ", -2);
 int ncclTopoUserGdrLevel = -1;
+/*
+ 这里除了看之前判断是否支持 gdr 之外，还要看 GPU 和 NIC 之间的距离是否小于 netGdrLevel，netGdrLevel 默认是 PATH_PXB，用户也可以自定义，默认值为 PXB 的原因可见官方文档：
 
+Even though the only theoretical requirement for GPUDirect RDMA to work between a third-party device and
+ an NVIDIA GPU is that they share the same root complex, there exist bugs (mostly in chipsets)
+ causing it to perform badly, or not work at all in certain setups.
+
+We can distinguish between three situations, depending on what is on the path between the GPU and the third-party device:
+
+PCIe switches only
+single CPU/IOH
+CPU/IOH <-> QPI/HT <-> CPU/IOH
+The first situation, where there are only PCIe switches on the path, is optimal and yields the best performance.
+ The second one, where a single CPU/IOH is involved, works,
+ but yields worse performance ( especially peer-to-peer read bandwidth has been shown to be severely limited on some processor architectures ).
+ Finally, the third situation, where the path traverses a QPI/HT link, may be extremely performance-limited or even not work reliably.
+
+可以看到在只有经过 PCIe switch 的时候性能最好，在经过 CPU 的时候性能较差，在跨 numa 的时候性能很差，甚至不可用。
+
+当 p2p 或者 gdr 不支持的时候，会通过 CPU 进行中转，通过 getLocalCpu 找到最近的 CPU c。
+
+ 然后 addCpuStep 将 i1 到 i2 的路径修改为 i1 到 c 的路径 + cpu 到 i2 的路径。
+
+ */
 ncclResult_t ncclTopoCheckGdr(struct ncclTopoSystem* system, int64_t busId, int netDev, int read, int* useGdr) {
   *useGdr = 0;
 
@@ -337,6 +391,26 @@ ncclResult_t ncclTopoCheckGdr(struct ncclTopoSystem* system, int64_t busId, int 
   return ncclSuccess;
 }
 
+/*
+首先通过 ncclTopoRemovePathType 将所有 node 中的 paths 清空。
+
+ncclTopoSetPaths 作用就是计算出其他所有节点到 baseNode 的 path，这里遍历所有的 CPU 节点，
+计算出其他所有节点到所有 CPU 节点的路径。
+
+ncclTopoSetPaths 实现类似 SPFA，由于这个版本的 NCCL 不允许 GPU 作为路径的中间节点，
+ 所以在 SPFA 的过程中不会将 GPU 节点添加到队列中更新其他节点，
+ 相当于这个无向图没有环，因此这个场景下的 SPFA 过程也就相当于 BFS。
+
+这里 baseNode 就是 CPU 节点，先分配 CPU 到 CPU path 的空间，nodeList 和 nextNodeList 就是队列的作用，
+先将 baseNode 入队列。
+
+getPath 函数是获取 node 中到 type 为 t 的第 id 个节点的路径 path。
+
+如果 remNode 不是 GPU，那么将 remNode 添加到 nextNodeList，等 nodeList 遍历完之后，
+将 nextNodeList 赋给 nodeList 继续遍历。
+
+然后回到 ncclTopoComputePaths，还是使用 ncclTopoSetPaths 计算 GPU 节点到其他所有节点的距离。
+ */
 ncclResult_t ncclTopoComputePaths(struct ncclTopoSystem* system, struct ncclPeerInfo* peerInfos) {
   // Precompute paths between GPUs/NICs.
 
@@ -401,6 +475,14 @@ ncclResult_t ncclTopoComputePaths(struct ncclTopoSystem* system, struct ncclPeer
   return ncclSuccess;
 }
 
+//接下来会通过 ncclTopoTrimSystem 删除图中不可达的 GPU 节点和用不到的 NIC。
+/*
+ * 首先通过类似并查集的思路将多个 GPU 节点合并成多个集合，myDomain 为当前 rank 的 GPU 所对应的集合号，
+ * 然后将不属于 myDomain 集合的 GPU 节点在图中删除掉，
+ * 最后判断下如果 comm 的 rank 数等于当前图中的 gpu 节点数，那么说明不需要网卡，所以也将网卡从图中删除。
+
+得到新的图结构后再重新执行一次 ncclTopoComputePaths 就得到最终各个节点之间的路径了。
+ */
 ncclResult_t ncclTopoTrimSystem(struct ncclTopoSystem* system, struct ncclComm* comm) {
   int *domains;
   int64_t *ids;
@@ -486,6 +568,21 @@ static int nextPow2(int v) {
   return pow2;
 }
 
+//p2p操作对应的channel如何创建出来的
+/*
+ 之前在建立ringGraph的时候有搜索出一系列的环，并根据这些环建立了channel，假设现在一共有nChannels个channel，
+ 而p2p需要p2pnChannels个channel，那么如果p2pnChannels大于nChannles，会再创建p2pnChannels - nChannels个channel，
+ 其他的复用；否则直接复用即可。
+
+对于每个send/recv操作，会使用p2pnChannelsPerPeer个channel并行发送/接收，那么当p2pnChannelsPerPeer比较小，
+ p2pnChannels比较大，会导致只用了前边的几个channel，无法充分利用所有的channel，
+ 举个例子，p2pnChannelsPerPeer = 2，p2pnChannels = 32，rank0和rank1，rank2的通信都会使用channel[1]和channel[2]，
+ 为了解决这个问题，nccl使用数组p2pChannels[p2pnChannelsPerPeer]作为偏移，比如p2pChannels[0] = 0, p2pChannels[1] = 16，
+ 那么rank0和rank1的通信会使用channel[1]和channel[17]，rank0和rank2的通信会使用channel[2]和channel[18]，更充分的利用了channel。
+
+为了方便理解，后续举例时假定p2pnChannels和p2pnChannelsPerPeer都为1。
+
+ */
 ncclResult_t ncclTopoComputeP2pChannels(struct ncclComm* comm) {
   comm->p2pnChannels = std::min(comm->nChannels, (int)ncclParamMaxP2pNChannels());
   comm->p2pnChannels = std::max(comm->p2pnChannels, (int)ncclParamMinP2pNChannels());

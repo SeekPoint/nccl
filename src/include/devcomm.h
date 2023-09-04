@@ -78,6 +78,8 @@ static_assert(NCCL_LL_CLEAN_MASK % NCCL_STEPS == 0, "Invalid NCCL_LL_CLEAN_MASK 
 #define NCCL_DIRECT_GPU 0x01
 #define NCCL_DIRECT_NIC 0x10
 
+// ncclConnInfo记录了通信过程上下文信息，本节只需要关注buffs，即通信过程中的buffer，
+//实际位于transportResources，这里只是指针指过去。
 struct ncclConnInfo {
   // Regular comm mechanism
   char *buffs[NCCL_NUM_PROTOCOLS]; // Local for recv, remote for send
@@ -93,6 +95,8 @@ struct ncclConnInfo {
   uint64_t llLastCleaning;
 };
 
+//ncclConnector中connected表示是否完成连接的建立，transportResources为通信过程中用到的buffer，
+//proxyAppend后续介绍数据通信过程再说。
 struct ncclConnector {
   int connected;
   struct ncclProxyArgs *proxyAppend;
@@ -104,13 +108,13 @@ struct ncclConnector {
 
 struct ncclRing {
   // Shortcuts for userRanks[1] and userRanks[n-1]
-  int prev;
-  int next;
+  int prev;  // 记录环中当前rank的上一个rank
+  int next;  // 记录环中当前rank的下一个rank
 
   // Maps an internal nccl index to user-specified rank order. This is necessary
   // since we need to know how the user expects data to be ordered across
   // devices. Ordered from current device.
-  int* userRanks;
+  int* userRanks; // 以当前rank为起点记录整个环
   int* devUserRanks;
 };
 

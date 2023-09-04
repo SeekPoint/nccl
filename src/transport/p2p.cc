@@ -12,8 +12,8 @@ struct p2pConnectInfo {
   int direct;
   int read;
   union {
-    void* directPtr;
-    cudaIpcMemHandle_t devIpc;
+    void* directPtr;  // 同进程使用这个字段记录当前rank的数据buffer
+    cudaIpcMemHandle_t devIpc;  // 不同进程的话使用共享显存通信，devIpc记录当前rank的ipc handle
   };
 };
 

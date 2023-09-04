@@ -323,6 +323,8 @@ ncclResult_t ncclTopoGetXmlFromFile(const char* xmlTopoFile, struct ncclXml* xml
 static void memcpylower(char* dst, const char* src, const size_t size) {
   for (int i=0; i<size; i++) dst[i] = tolower(src[i]);
 }
+
+/*首先设置pciNode的各种属性，通过getPciPath获取busId对应的sysfs路径path，其实这个路径就是PCI树中根到叶结点的路径。*/
 static ncclResult_t getPciPath(const char* busId, char** path) {
   char busPath[] = "/sys/class/pci_bus/0000:00/../../0000:00:00.0";
   memcpylower(busPath+sizeof("/sys/class/pci_bus/")-1, busId, BUSID_REDUCED_SIZE-1);
@@ -334,7 +336,8 @@ static ncclResult_t getPciPath(const char* busId, char** path) {
   }
   return ncclSuccess;
 }
-
+//然后读取path下的属性，获取class（PCI设备类型），link_speed，link_width等设置到xml pciNode中，
+//ncclTopoGetStrFromSys其实就是读取path下的内核文件保存到strValue
 ncclResult_t ncclTopoGetStrFromSys(const char* path, const char* fileName, char* strValue) {
   char filePath[PATH_MAX];
   sprintf(filePath, "%s/%s", path, fileName);
@@ -436,7 +439,7 @@ ncclResult_t ncclTopoGetXmlFromCpu(struct ncclXmlNode* cpuNode, struct ncclXml* 
 #endif
   return ncclSuccess;
 }
-
+//获取xml中的有没有创建当前卡的xml node，此时没有，所以就新建一个xml node叫做"pci"，表示当前gpu卡，设置"pci"["busid"]=busd。
 ncclResult_t ncclTopoGetPciNode(struct ncclXml* xml, const char* busId, struct ncclXmlNode** pciNode) {
   NCCLCHECK(xmlFindTagKv(xml, "pci", pciNode, "busid", busId));
   if (*pciNode == NULL) {
@@ -458,6 +461,7 @@ int checkBDFFormat(char* bdf) {
   return 1;
 }
 
+//这个函数主要逻辑就是在sysfs中获取gpu节点到cpu的路径，通过这个路径转成xml树，并读取该路径下相关属性设置到xml里
 ncclResult_t ncclTopoGetXmlFromSys(struct ncclXmlNode* pciNode, struct ncclXml* xml) {
   // Fill info, then parent
   const char* busId;
