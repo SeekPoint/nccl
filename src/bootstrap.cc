@@ -138,6 +138,7 @@ static ncclResult_t bootstrapNetCloseListen(void* listenComm) { NCCLCHECK(bootst
 // Additional sync functions
 static ncclResult_t bootstrapNetSend(void* sendComm, void* data, int size) {
   struct bootstrapNetComm* comm = (struct bootstrapNetComm*)sendComm;
+  //其中socketSend就是执行send接口发送数据。
   NCCLCHECK(socketSend(comm->fd, &size, sizeof(int)));
   NCCLCHECK(socketSend(comm->fd, data, size));
   return ncclSuccess;
@@ -177,10 +178,6 @@ static ncclResult_t setFilesLimit() {
   return ncclSuccess;
 }
 
-/*
- * rank0收到数据后会做什么工作呢，回顾一下，
- * rank0的节执行ncclGetUniqueId生成ncclUniqueId，
- * 其中在执行bootstrapCreateRoot的最后会启动一个线程执行bootstrapRoot。*/
 static void *bootstrapRoot(void* listenComm) {
   struct extInfo info;
   ncclNetHandle_t *rankHandles = NULL;
@@ -194,7 +191,19 @@ static void *bootstrapRoot(void* listenComm) {
   /* Receive addresses from all ranks */
   int nranks = 0, c = 0;
   do {
+      /*listenComm是上一个博文中rank0创建的监听fd，
+       * bootstrapNetAccept是从listenComm中获取一个新连接，
+       * 使用新连接的fd创建recvcomm。*/
     NCCLCHECKGOTO(bootstrapNetAccept(listenComm, &tmpComm), res, out);
+
+    /*然后通过bootstrapNetRecv读取tmpComm的数据，即其他rank发送来的extInfo，
+     * 然后保存其他rank的extHandleListen和extHandleListenRoot，
+     * 这个时候rank0就获取到其他所有rank的ip和port了。
+     * 获取完所有rank的info之后开始建环，将节点(r+1) % nranks的extHandleListen发送给节点r，
+     * 就是说将节点r的next节点的nethandle发送给节点r。
+     * 这里可以看出，每个节点创建了两个listen comm，
+     * 其中rank0使用extHandleListenRoot进行通信，
+     * 其他节点之间通过extHandleListen进行通信。*/
     NCCLCHECKGOTO(bootstrapNetRecv(tmpComm, &info, sizeof(info)), res, out);
     NCCLCHECKGOTO(bootstrapNetCloseRecv(tmpComm), res, out);
 
@@ -279,11 +288,12 @@ struct unexConn {
   struct unexConn* next;
 };
 
+//即ncclComm的bootstrap，类型为extState。
 struct extState {
   void* extBstrapListenComm;    //前节点的监听socket
   void* extBstrapRingRecvComm;  //当前节点和prev节点的socket连接
   void* extBstrapRingSendComm;  //当前节点连接next的socket连接
-  ncclNetHandle_t* peerBstrapHandles;
+  ncclNetHandle_t* peerBstrapHandles; //所有rank的ip port（对应extBstrapListenComm），dev默认为0，表示用第几个ip地址。
   struct unexConn* unexpectedConnections;
   int rank;
   int nranks;
@@ -312,6 +322,16 @@ ncclResult_t bootstrapInit(ncclUniqueId * id, int rank, int nranks, void** commS
   }
   // listen will return the local address via info (specify interface type 'findSubnetIf')
   state->dev = idFromEnv ? findSubnetIf : 0;
+  /*然后通过bootstrapNetListen创建extHandleListen和extHandleListenRoot两个bootstrap comm，
+   * 如前文所述，bootstrap comm其实就是保存了fd，这里创建两个comm的原因是extHandleListen是rank之间实际使用的bootstrap连接，
+   * extHandleListenRoot是rank0节点和其他所有rank进行通信使用的连接。
+
+   bootstrapNetListen函数上节有介绍过，会获取到第dev个当前机器的ip，
+   然后listen获取监听fd，将ip port写到nethandle，
+   获取到的bootstrap comm写到listencomm。
+
+   然后将rank，nrank，extHandleListen和extHandleListenRoot写到extInfo里。
+   */
   void* extBstrapListenCommRoot;
   NCCLCHECK(bootstrapNetListen(state->dev, &info.extHandleListen, &state->extBstrapListenComm));
   NCCLCHECK(bootstrapNetListen(state->dev, &info.extHandleListenRoot, &extBstrapListenCommRoot));
@@ -326,12 +346,36 @@ ncclResult_t bootstrapInit(ncclUniqueId * id, int rank, int nranks, void** commS
     (void) nanosleep(&tv, NULL);
   }
 
+  /*
+   * netHandle为ncclUniqueId，即rank0的ip port，然后通过bootstrapNetConnect创建bootstrap send comm，
+   * 类比bootstrapNetListen，bootstrapNetConnect就是建立到netHandle的socket连接，
+   * 将socket写到sendComm里，这里dev并没有用到。
+   * */
   // send info on my listening socket to root
   NCCLCHECK(bootstrapNetConnect(state->dev, netHandle, &tmpSendComm));
+
+  //然后通过bootstrapNetSend将extInfo发送出去，即发给rank0
   NCCLCHECK(bootstrapNetSend(tmpSendComm, &info, sizeof(info)));
+
+  //然后通过bootstrapNetCloseSend关闭fd。
   NCCLCHECK(bootstrapNetCloseSend(tmpSendComm));
+  /*rank0收到数据后会做什么工作呢，回顾一下，rank0的节执行ncclGetUniqueId生成ncclUniqueId，
+   * 其中在执行bootstrapCreateRoot的最后会启动一个线程执行bootstrapRoot。*/
 
   // get info on my "next" rank in the bootstrap ring from root
+  /*接着所有rank都会在extHandleListenRoot上接收新连接创建tmpRecvComm，然后接收到当前rank的next的ip，port；
+   * 然后连接next创建bscomm到state->extBstrapRingSendComm，接收prev的连接创建bscomm到state->extBstrapRingRecvComm，
+   * 到现在bootstrap网络连接就完全建立起来了，如下图：
+
+   001-003.png
+
+    最后gather所有rank的ip port，首先将自己的nethandle放到peerBstrapHandles的对应位置，如下所示。
+
+   001-004.png
+
+    然后执行bootstrapAllGather：
+
+    */
   ncclNetHandle_t extHandleNext;
   NCCLCHECK(bootstrapNetAccept(extBstrapListenCommRoot, &tmpRecvComm));
   NCCLCHECK(bootstrapNetRecv(tmpRecvComm, &extHandleNext, sizeof(extHandleNext)));
@@ -351,7 +395,19 @@ ncclResult_t bootstrapInit(ncclUniqueId * id, int rank, int nranks, void** commS
 
   return ncclSuccess;
 }
+/*
+ * 每一次将自己的data发送给对应的rank，然后接收其他rank发送过来的data，如下图。
 
+第一步：
+001-002.png
+第二步：
+001-001.png
+
+到这里每个rank就都有了全局所有rank的ip port。
+最后总结一下，本节主要创建了bootstrap环形网络连接，并保存到ncclComm里。
+
+
+ */
 ncclResult_t bootstrapAllGather(void* commState, void* allData, int size) {
   struct extState* state = (struct extState*)commState;
   char* data = (char*)allData;

@@ -1,0 +1,43 @@
+https://blog.csdn.net/kidgin7439/category_11998768.html  和知乎同名的
+NVIDIA NCCL 源码学习（十）- 多机间ncclSend和ncclRecv的过程
+https://blog.csdn.net/KIDGIN7439/article/details/130936177
+回忆一下单机的执行流程，用户执行ncclSend之后通过ncclEnqueueCheck将sendbuff，sendbytes，peer等信息保存到了comm->p2plist中；
+然后执行ncclGroupEnd，如果发现channel没有建立到peer的链接则先建链，
+然后根据p2plist执行scheduleSendRecv(ncclSaveKernel)将信息保存到channel->collectives，
+然后再启动kernel，kernel会遍历channel->collectives执行send和recv。然后我们看下多机的流程是怎样的。
+最后总结下多机通信的整体流程
+通信由kernel和proxy线程协调完成，send端kernel负责将数据从input搬运到buf，proxy线程负责将buf中数据通过网络发送给recv端
+kernel和proxy间通过队列实现生产者消费者模式
+send端通过rdma send发送数据，和recv端通过队列实现生产者消费者模式，队列位于send端，recv端每次下发一个wr到rq之后会执行rdma write通知send端
+
+NVIDIA NCCL 源码学习（九）- 单机内ncclSend和ncclRecv的过程
+https://blog.csdn.net/KIDGIN7439/article/details/128326053
+单机内的通信都是通过kernel来进行的，所以整个通信的过程可以分为两步，第一步是准备kernel相关的参数，第二步是实际执行kernel的过程。
+
+NVIDIA NCCL 源码学习（八）- 数据通信链路transport的建立
+https://blog.csdn.net/kidgin7439/article/details/126953432
+最后简单总结下，建链的过程都是以下过程：
+接收端 执行recv setup，创建buffer等，将相关信息记录到connectIndo，启动一个监听socket，ip port同样记录到connectInfo，通过bootstrap发送connectInfo到 发送端。
+发送端 执行send setup，创建buffer等，将相关信息记录到connectInfo，然后发送给 接收端。这一步rdma场景没有用到connectInfo。
+发送端 接受到步骤1中 接收端 的信息，然后建立 发送端 到 接收端 的链接，p2p场景的话只是简单记录对端buffer，rdma场景的话需要初始化qp到INIT状态。
+接收端 接受到步骤2中send发送的信息，然后建立 接收端 到 发送端 的链接，p2p场景还是记录对端buffer，rdma场景需要初始化qp到RTS状态，将本端的qp信息发送回对端。
+如果rdma场景的话，发送端 还需接收对端的qp状态初始化本端的qp到RTS状态。
+
+NVIDIA NCCL 源码学习（七）- 机器间channel连接
+https://blog.csdn.net/KIDGIN7439/article/details/128144057
+NVIDIA NCCL 源码学习（六）- channel搜索
+https://zhuanlan.zhihu.com/p/653440728
+NVIDIA NCCL 源码学习（五）- 路径计算
+https://my.oschina.net/oneflow/blog/10089670
+NVIDIA NCCL 源码学习（四）- 建图过程
+https://zhuanlan.zhihu.com/p/640812018
+NVIDIA NCCL 源码学习（三）- 机器内拓扑分析
+https://zhuanlan.zhihu.com/p/625606436
+
+NVIDIA NCCL 源码学习（二）- bootstrap网络连接的建立
+https://zhuanlan.zhihu.com/p/620499558
+==所有节点间bootstrap的连接是如何建立的
+
+NVIDIA NCCL 源码学习（一）- 初始化及ncclUniqueId的产生
+https://zhuanlan.zhihu.com/p/614746112
+==介绍到rank0的机器生成了ncclUniqueId，并完成了机器的bootstrap网络和通信网络的初始化

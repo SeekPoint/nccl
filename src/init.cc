@@ -886,7 +886,8 @@ affinity_restore:
  * 然后所有节点都会执行ncclCommInitRank，这里其他节点也会进行初始化bootstrap网络和通信网络的操作，
  * 然后会执行到ncclCommInitRankSync。
  *
- * ncclComm_t是指向ncclComm的指针，ncclComm是一个大杂烩，包含了通信用到的所有上下文信息，里面的字段等用到的时候再介绍，
+ * ncclComm_t是指向ncclComm的指针，ncclComm是一个大杂烩，
+ * 包含了通信用到的所有上下文信息，里面的字段等用到的时候再介绍，
  * 然后通过commAlloc分配newcom，并且完成初始化，比如当前是哪个卡，对应的pcie busid是什么，
  * 然后执行initTransportsRank
  * */
