@@ -29,8 +29,12 @@ NVIDIA NCCL 源码学习（六）- channel搜索
 https://zhuanlan.zhihu.com/p/653440728
 NVIDIA NCCL 源码学习（五）- 路径计算
 https://my.oschina.net/oneflow/blog/10089670
+
 NVIDIA NCCL 源码学习（四）- 建图过程
 https://zhuanlan.zhihu.com/p/640812018
+==上次分析了NCCL对机器PCI系统进行拓扑分析的过程，产出的结果为xml格式，
+接下来，NCCL会根据这个xml进图的建立过程以便之后进行路径搜索。
+总结下，由于拓扑分析产出的xml不便于进行后续的路径搜索，所以本节基于xml对PCI系统进行了建图。
 
 NVIDIA NCCL 源码学习（三）- 机器内拓扑分析
 https://zhuanlan.zhihu.com/p/625606436

@@ -568,7 +568,7 @@ ncclResult_t ncclTopoGetXmlFromSys(struct ncclXmlNode* pciNode, struct ncclXml* 
    * 然后是对于所有的网卡，类似上述gpu的过程，通过ncclTopoGetXmlFromSys建立xml树，
    * 如下所示，只展示一张网卡的情况，其中"net"，"nic"和"nic"的父节点都表示同一张网卡。
    * 002-005.png
-   * 
+   *
 <system version="1">
   <cpu numaid="0" affinity="00000000,0000000f,ffff0000,00000000,000fffff" arch="x86_64" vendor="GenuineIntel" familyid="6" modelid="85">
     <pci busid="0000:11:00.0" class="0x060400" link_speed="8 GT/s" link_width="16">
