@@ -240,7 +240,10 @@ static ncclResult_t GetSocketAddr(union socketAddress* addr) {
   memcpy(addr, &ncclIbIfAddr, sizeof(*addr));
   return ncclSuccess;
 }
-
+/*这里主要是获取网卡名，PCIe路径，guid等信息，
+ * 然后查看是否有/sys/kernel/mm/memory_peers/nv_mem/version判断是否安装了nv_peermem，
+ * 即nv的驱动，如果安装了的话则设置props->ptrSupport |= NCCL_PTR_CUDA，表示可以注册显存。
+*/
 ncclResult_t ncclIbGetProperties(int dev, ncclNetProperties_t* props) {
   props->name = ncclIbDevs[dev].devName;
   props->pciPath = ncclIbDevs[dev].pciPath;

@@ -559,13 +559,8 @@ static ncclResult_t checkCollNetSetup(struct ncclComm* comm, int rank, int collN
 NCCL_PARAM(CrossNic, "CROSS_NIC", 2);
 NCCL_PARAM(GraphDumpFileRank, "GRAPH_DUMP_FILE_RANK", 0);
 
-//由于GPU机器架构是多种多样的，一台机器上可能有多个网卡，多个GPU卡，卡间连接也各不相同，因此需要对机器内设备连接拓扑进行分析，以使性能在各种拓扑结构下都尽可能好。
-/*创建nrank个allGather1Data，然后通过fillInfo 填充当前rank的peerInfo，ncclPeerInfo是rank的一些基本信息，比如rank号，在哪个机器的哪个进程等。
- *
- * 然后尝试注册显存，如果可以注册则设置gdrSupport为1，这里其实会创建rdma连接，这个在后边会单独介绍，本次先略过。
 
-
-
+/*
 initTransportsRank 这个函数对数据传输做了大量的初始化工作。包括：
 
     建立设备之间的socket连接
@@ -581,7 +576,7 @@ initTransportsRank 这个函数对数据传输做了大量的初始化工作。包括：
 对于p2p和shm通信方式，在建立连接后，可以直接进行数据传输（通过GPU peer-to-peer或者host memory），
 而通过network连接的peer，还需要proxy线程来通过socket进行数据传输。
 
- * /
+ */
 static ncclResult_t initTransportsRank(struct ncclComm* comm, ncclUniqueId* commId) {
   // We use 3 AllGathers
   // 1. { peerInfo, comm }
@@ -595,6 +590,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, ncclUniqueId* comm
   NCCLCHECK(bootstrapInit(commId, rank, nranks, &comm->bootstrap));
 
   // AllGather1 - begin
+  // 创建nrank个allGather1Data，然后通过fillInfo 填充当前rank的peerInfo，ncclPeerInfo是rank的一些基本信息，比如rank号，在哪个机器的哪个进程等。
   struct {
     struct ncclPeerInfo peerInfo;
     struct ncclComm* comm;
@@ -604,6 +600,8 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, ncclUniqueId* comm
   allGather1Data[rank].comm = comm;
   struct ncclPeerInfo* myInfo = &allGather1Data[rank].peerInfo;
   NCCLCHECK(fillInfo(comm, myInfo, commHash));
+
+  //然后bootstrapAllGather广播allGather1Data，将获取到的其他节点peerinfo拷贝到comm里。
   NCCLCHECK(bootstrapAllGather(comm->bootstrap, allGather1Data, sizeof(*allGather1Data)));
 
   NCCLCHECK(ncclCalloc(&comm->peerInfo, nranks+1)); // Extra rank to represent CollNet root

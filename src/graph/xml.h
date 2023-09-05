@@ -106,7 +106,9 @@ static ncclResult_t xmlFindTag(struct ncclXml* xml, const char* tagName, struct 
   }
   return ncclSuccess;
 }
-/*xmlFindTagKv会遍历xml已分配的节点，找到节点名为tagName的节点n，
+
+/*xmlFindTagKv会遍历xml已分配的节点，
+ * 找到节点名为tagName的节点n，
 然后判断节点n["attrName"]是否等于attrValue，如果相等，则设置node为n。*/
 static ncclResult_t xmlFindTagKv(struct ncclXml* xml, const char* tagName, struct ncclXmlNode** node, const char* attrName, const char* attrValue) {
   *node = NULL;
@@ -189,7 +191,9 @@ static ncclResult_t xmlGetSubKvInt(struct ncclXmlNode* node, const char* subName
   NCCLCHECK(xmlGetSubKv(node, subName, sub, attrName, strValue));
   return ncclSuccess;
 }
-/*xmlAddNode进行node的分配，表示在xml里新申请一个节点sub，sub的name设置为subName，父节点为parent。*/
+
+/*xmlAddNode进行node的分配，
+ * 表示在xml里新申请一个节点sub，sub的name设置为subName，父节点为parent。*/
 static ncclResult_t xmlAddNode(struct ncclXml* xml, struct ncclXmlNode* parent, const char* subName, struct ncclXmlNode** sub) {
   if (xml->maxIndex == MAX_NODES) {
     WARN("Error : too many XML nodes (max %d)", MAX_NODES);

@@ -31,8 +31,27 @@ NVIDIA NCCL 源码学习（五）- 路径计算
 https://my.oschina.net/oneflow/blog/10089670
 NVIDIA NCCL 源码学习（四）- 建图过程
 https://zhuanlan.zhihu.com/p/640812018
+
 NVIDIA NCCL 源码学习（三）- 机器内拓扑分析
 https://zhuanlan.zhihu.com/p/625606436
+==上节介绍所有节点执行了bootstrap网络连接的建立，接下来介绍下拓扑分析。
+==由于GPU机器架构是多种多样的，一台机器上可能有多个网卡，多个GPU卡，卡间连接也各不相同，
+==因此需要对机器内设备连接拓扑进行分析，以使性能在各种拓扑结构下都尽可能好
+
+在看具体拓扑分析流程之前先简单了解一下PCIe的一些概念，一个简单的PCIe系统示例如下。
+002-001.png
+switch的作用是扩展PCIe端口，下边可以连接设备或者其他switch，上游来的请求被被他转发，
+PCIe设备可以连在RC，也可以连在swtich，一个switch的内部如下所示。
+002-002.png
+内部有一个PCIe总线 ，然后通过多个Bridge扩展出多个端口，其中上边的那个称为上游端口，其他的叫做下游端口。
+前文有提到NCCL中很常用的一个变量名叫busId，比如gpu和ib网卡，
+注意区分NCCL里的busId并不是指的总线号，指的其实是定位一个PCIe设备用到的id，
+即BDF(bus + device + function)，一个bus上有多个设备，一个设备有多个功能，
+因此通过BDF就可以定位一个设备，
+在机器启动完成PCIe的配置之后会将相关信息通过sysfs提供给用户，
+NCCL就是通过sysfs来完成拓扑检测的。
+
+总结一下，本节主要介绍了NCCL拓扑分析的过程，通过sysfs将gpu和网卡对应的pci树结构建立出来了xml树。
 
 NVIDIA NCCL 源码学习（二）- bootstrap网络连接的建立
 https://zhuanlan.zhihu.com/p/620499558

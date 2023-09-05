@@ -32,10 +32,15 @@ static ncclResult_t ncclNetCloseListen(void* listenComm) { NCCLCHECK(ncclNet->cl
 
 // Test whether the current GPU support GPU Direct RDMA.
 #define GPU_BUF_SIZE (2*1024*1024)
+/*而IB提供了peer memory的接口，使得ib网卡可以访问其他PCIe空间，
+ * nv基于peer memory实现了自己的驱动，使得rdma可以直接注册显存，
+ * 这样通信就可以避免host和device的内存拷贝，IB可以直接dma显存，即gdr。
+ * */
 static ncclResult_t ncclGpuGdrSupport(int* gdrSupport) {
   int netDevs;
   NCCLCHECK(ncclNetDevices(&netDevs));
   *gdrSupport = 0;
+  //这里会遍历每一个网卡，获取网卡的信息，由第一节可以知道这里的ncclNet就是ncclNetIb。
   for (int dev=0; dev<netDevs; dev++) {
     // Find a net device which is GDR-capable
     ncclNetProperties_t props;
@@ -56,6 +61,7 @@ static ncclResult_t ncclGpuGdrSupport(int* gdrSupport) {
       NCCLCHECK(ncclNetDeregMr(sComm, mHandle));
       NCCLCHECK(ncclNetRegMr(rComm, gpuPtr, GPU_BUF_SIZE, NCCL_PTR_CUDA, &mHandle));
       NCCLCHECK(ncclNetDeregMr(rComm, mHandle));
+      //然后尝试注册显存，如果可以注册则设置gdrSupport为1，这里其实会创建rdma连接，这个在后边会单独介绍，本次先略过。
       *gdrSupport = 1;
     }
     ncclDebugNoWarn = 0;

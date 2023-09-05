@@ -323,8 +323,15 @@ ncclResult_t ncclTopoGetXmlFromFile(const char* xmlTopoFile, struct ncclXml* xml
 static void memcpylower(char* dst, const char* src, const size_t size) {
   for (int i=0; i<size; i++) dst[i] = tolower(src[i]);
 }
-
-/*首先设置pciNode的各种属性，通过getPciPath获取busId对应的sysfs路径path，其实这个路径就是PCI树中根到叶结点的路径。*/
+/*首先设置pciNode的各种属性，
+ * 通过getPciPath获取busId对应的sysfs路径path，
+ * 其实这个路径就是PCI树中根到叶结点的路径。
+ *
+ * 举个例子比如path是
+ * /sys/devices/pci0000:10/0000:10:00.0/0000:11:00.0/0000:12:00.0/0000:13:00.0/0000:14:00.0/0000:15:00.0/0000:16:00.0/0000:17:00.0，
+ * 其中GPU的busId是0000:17:00.0，那么这个path对应下图，注意，下图略去了15:00.0对应的switch。
+ * 002-003.png
+ * */
 static ncclResult_t getPciPath(const char* busId, char** path) {
   char busPath[] = "/sys/class/pci_bus/0000:00/../../0000:00:00.0";
   memcpylower(busPath+sizeof("/sys/class/pci_bus/")-1, busId, BUSID_REDUCED_SIZE-1);
@@ -336,6 +343,7 @@ static ncclResult_t getPciPath(const char* busId, char** path) {
   }
   return ncclSuccess;
 }
+
 //然后读取path下的属性，获取class（PCI设备类型），link_speed，link_width等设置到xml pciNode中，
 //ncclTopoGetStrFromSys其实就是读取path下的内核文件保存到strValue
 ncclResult_t ncclTopoGetStrFromSys(const char* path, const char* fileName, char* strValue) {
@@ -439,7 +447,7 @@ ncclResult_t ncclTopoGetXmlFromCpu(struct ncclXmlNode* cpuNode, struct ncclXml* 
 #endif
   return ncclSuccess;
 }
-//获取xml中的有没有创建当前卡的xml node，此时没有，所以就新建一个xml node叫做"pci"，表示当前gpu卡，设置"pci"["busid"]=busd。
+
 ncclResult_t ncclTopoGetPciNode(struct ncclXml* xml, const char* busId, struct ncclXmlNode** pciNode) {
   NCCLCHECK(xmlFindTagKv(xml, "pci", pciNode, "busid", busId));
   if (*pciNode == NULL) {
@@ -475,6 +483,7 @@ ncclResult_t ncclTopoGetXmlFromSys(struct ncclXmlNode* pciNode, struct ncclXml* 
   }
   NCCLCHECK(xmlGetAttrIndex(pciNode, "link_speed", &index));
   if (index == -1) {
+
     if (path == NULL) NCCLCHECK(getPciPath(busId, &path));
     char deviceSpeedStr[MAX_STR_LEN];
     float deviceSpeed;
@@ -506,6 +515,17 @@ ncclResult_t ncclTopoGetXmlFromSys(struct ncclXmlNode* pciNode, struct ncclXml* 
 
     // Go up one level in the PCI tree. Rewind two "/" and follow the upper PCI
     // switch, or stop if we reach a CPU root complex.
+    /*然后从pciNode开始往上跳，因为一个switch的上游端口和下游端口分别对应了一个bridge，
+     * NCCL使用上游端口bridge的busid表示这个switch，因此这里要向上跳两次再建立一个xml node表示这个switch，
+     * 往上找到一个PCI设备就将slashCount加一。
+     * 当slashCount==2就找到了一个switch上游端口，
+     * 这个时候创建一个新的xml pci节点parent表示当前switch，
+     * 然后将当前节点pciNode链接到parent，此时parent仍然是xml pci节点。
+     * 因此，继续递归执行ncclTopoGetXmlFromSys，直到遇到RC，此时给"system"创建一个子节点"cpu"，
+     * 停止递归，然后执行ncclTopoGetXmlFromCpu，设置"cpu"的各种属性，
+     * 比如arch（比如x86还是arm），affinity（该cpu的numa都有哪些cpu core），numaid等。
+     * 到这里ncclTopoGetXmlFromSys就执行结束了，接着看ncclTopoFillGpu。
+     * */
     int slashCount = 0;
     int parentOffset;
     for (parentOffset = strlen(path)-1; parentOffset>0; parentOffset--) {
@@ -543,6 +563,40 @@ ncclResult_t ncclTopoGetXmlFromSys(struct ncclXmlNode* pciNode, struct ncclXml* 
     pciNode->parent = parent;
     parent->subs[parent->nSubs++] = pciNode;
   }
+
+  /*
+   * 然后是对于所有的网卡，类似上述gpu的过程，通过ncclTopoGetXmlFromSys建立xml树，
+   * 如下所示，只展示一张网卡的情况，其中"net"，"nic"和"nic"的父节点都表示同一张网卡。
+   * 002-005.png
+   * 
+<system version="1">
+  <cpu numaid="0" affinity="00000000,0000000f,ffff0000,00000000,000fffff" arch="x86_64" vendor="GenuineIntel" familyid="6" modelid="85">
+    <pci busid="0000:11:00.0" class="0x060400" link_speed="8 GT/s" link_width="16">
+      <pci busid="0000:13:00.0" class="0x060400" link_speed="8 GT/s" link_width="16">
+        <pci busid="0000:15:00.0" class="0x060400" link_speed="8 GT/s" link_width="16">
+          <pci busid="0000:17:00.0" class="0x030200" link_speed="16 GT/s" link_width="16">
+            <gpu dev="0" sm="80" rank="0" gdr="1">
+              <nvlink target="0000:e7:00.0" count="2" tclass="0x068000"/>
+              <nvlink target="0000:e4:00.0" count="2" tclass="0x068000"/>
+              <nvlink target="0000:e6:00.0" count="2" tclass="0x068000"/>
+              <nvlink target="0000:e9:00.0" count="2" tclass="0x068000"/>
+              <nvlink target="0000:e5:00.0" count="2" tclass="0x068000"/>
+              <nvlink target="0000:e8:00.0" count="2" tclass="0x068000"/>
+            </gpu>
+          </pci>
+        </pci>
+      </pci>
+      <pci busid="0000:1c:00.0" class="0x020000" link_speed="8 GT/s" link_width="16">
+        <nic>
+          <net name="mlx5_0" dev="0" speed="100000" port="1" guid="0x82d0c0003f6ceb8" maxconn="262144" gdr="1"/>
+        </nic>
+      </pci>
+    </pci>
+  </cpu>
+</system>
+
+总结一下，本节主要介绍了NCCL拓扑分析的过程，通过sysfs将gpu和网卡对应的pci树结构建立出来了xml树。
+   */
   if (strcmp(parent->name, "pci") == 0) {
     NCCLCHECK(ncclTopoGetXmlFromSys(parent, xml));
   } else if (strcmp(parent->name, "cpu") == 0) {
@@ -560,6 +614,7 @@ ncclResult_t ncclTopoGetXmlFromGpu(struct ncclXmlNode* pciNode, nvmlDevice_t nvm
   int index = -1;
 
   int dev = -1;
+  //首先在xml gpu节点"pci"下创建节点"gpu"，然后设置"gpu"节点的属性，比如dev，计算能力sm，
   NCCLCHECK(xmlGetAttrIndex(gpuNode, "dev", &index));
   if (index == -1) {
     if (nvmlDev == NULL) {
@@ -591,6 +646,7 @@ ncclResult_t ncclTopoGetXmlFromGpu(struct ncclXmlNode* pciNode, nvmlDevice_t nvm
   NCCLCHECK(xmlGetAttrInt(gpuNode, "sm", &sm));
 
   struct ncclXmlNode* nvlNode = NULL;
+  //// 然后开始查询nvlink相关信息，遍历所有可能的nvlink
   NCCLCHECK(xmlGetSub(pciNode, "nvlink", &nvlNode));
   if (nvlNode == NULL) {
     // NVML NVLink detection
@@ -601,6 +657,10 @@ ncclResult_t ncclTopoGetXmlFromGpu(struct ncclXmlNode* pciNode, nvmlDevice_t nvm
       maxNvLinks = 0;
     }
 
+      //通过nvmlDeviceGetNvLinkCapability查询nvlink信息
+      // 如果这个nvlink被启用，那么在"gpu"节点下新建一个"nvlink"节点，设置"target"属性表示nvlink对端的PCIe busId，
+      // 将"target"相同的"nvlink"节点表示为一个，用"count"表示起止点之间有多少条nvlink，
+      // 然后设置属性"tclass"表示"target"是什么类型的PCI设备。
     for (int l=0; l<maxNvLinks; ++l) {
       // Check whether we can use this NVLink for P2P
       unsigned canP2P;
@@ -660,13 +720,25 @@ ncclResult_t ncclTopoGetXmlFromGpu(struct ncclXmlNode* pciNode, nvmlDevice_t nvm
 
 ncclResult_t ncclTopoFillGpu(struct ncclXml* xml, const char* busId, struct ncclXmlNode** gpuNode) {
   struct ncclXmlNode* node;
+  //ncclTopoGetPciNode获取xml中的有没有创建当前卡的xml node，此时没有，
+  // 所以就新建一个xml node叫做"pci"，表示当前gpu卡，设置"pci"["busid"]=busd
   NCCLCHECK(ncclTopoGetPciNode(xml, busId, &node));
+
+  //ncclTopoGetXmlFromSys这个函数主要逻辑就是在sysfs中获取gpu节点到cpu的路径，
+  // 通过这个路径转成xml树，并读取该路径下相关属性设置到xml里
   NCCLCHECK(ncclTopoGetXmlFromSys(node, xml));
+
+  //然后通过wrapNvmlSymbols加载动态库libnvidia-ml.so.1，用来获取gpu的相关信息
   NCCLCHECK(wrapNvmlSymbols());
   NCCLCHECK(wrapNvmlInit());
   nvmlDevice_t nvmlDev;
   if (wrapNvmlDeviceGetHandleByPciBusId(busId, &nvmlDev) != ncclSuccess) nvmlDev = NULL;
   NCCLCHECK(ncclTopoGetXmlFromGpu(node, nvmlDev, xml, gpuNode));
+  /*到这里ncclTopoFillGpu就执行结束了，此时xml如下所示，
+   * 图里只展示了一张网卡的情况，其中"gpu"和他的父节点其实都是指的同一个gpu。
+    002-004.png
+    然后回到ncclTopoGetSystem，会设置"gpu"的rank和gdr属性。
+  */
   return ncclSuccess;
 }
 
