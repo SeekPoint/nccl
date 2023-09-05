@@ -615,13 +615,16 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, ncclUniqueId* comm
   // AllGather1 data is used again below
   // AllGather1 - end
 
-  //NCCL 路径计算的过 程，主要是这三步。
-  //其中 ncclTopoComputePaths 就是执行路径的计算，ncclTopoTrimSystem 是删除用不到的节点，接下来详细看下。
   // Topo detection / System graph creation
   NCCLCHECK(ncclTopoGetSystem(comm, &comm->topo));
   // Compute paths between GPUs and NICs
+
+    //NCCL 路径计算的过 程，主要是这三步。
+    //其中 ncclTopoComputePaths 就是执行路径的计算，ncclTopoTrimSystem 是删除用不到的节点，接下来详细看下。
   NCCLCHECK(ncclTopoComputePaths(comm->topo, comm->peerInfo));
+
   // Remove inaccessible GPUs and unused NICs
+  //通过ncclTopoTrimSystem删除图中不可达的GPU节点和用不到的NIC
   NCCLCHECK(ncclTopoTrimSystem(comm->topo, comm));
   // Recompute paths after trimming
   NCCLCHECK(ncclTopoComputePaths(comm->topo, comm->peerInfo));

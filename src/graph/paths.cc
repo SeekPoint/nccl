@@ -19,13 +19,7 @@ struct ncclTopoNodeList {
 };
 
 /*
- * 通过 getPath 获取到 CPU 节点到自己的 path，然后设置 count 为 0，带宽为 LOC_WIDTH，type 为 PATH_LOC。
-
-然后每次从 nodeList 中拿出一个节点 node，获取 node 到 baseNode 的路径 path，
- 然后用 node 去更新和 node 相连的节点，遍历 node 的边 link，获取 link 对端节点 remNode，
- 获取 remNode 到 baseNode 的路径 remPath，此时需要比较两个路径哪个更优，一个路径是原来的 remPath，
- 另一个是 path+link 这个新路径，新路径的带宽 width 是 path 和 link 的带宽取个 min，
- 如果 width 大于 remPath->width，那么 remPath 更新为 path+link。
+ getPath函数是获取node中到type为t的第id个节点的路径path
  */
 static ncclResult_t getPath(struct ncclTopoSystem* system, struct ncclTopoNode* node, int t, int64_t id, struct ncclTopoLinkList** path) {
   for (int i=0; i<system->nodes[t].count; i++) {
@@ -38,13 +32,7 @@ static ncclResult_t getPath(struct ncclTopoSystem* system, struct ncclTopoNode* 
   return ncclInternalError;
 }
 
-/*路径更新后需要计算 remPath 的 type，这里有个取巧的地方是上节设置边 type 和本节设置路径 type 是对应的，
- * 比如 LINK_PCI 等于 PATH_PIX，然后可以看到之前说的各种路径的 type 是怎么计算出来的。
 
-首先计算当前 link 作为一条路径的 type，初始化为 link 的 type，比如这个边是 LINK_PCI，那么就是 LINK_PIX，
- 如果 remPath 的 count 大于 3 的话 type 就会更新为 PATH_PXB（但是这里有个疑问是大于 3 可能也跨过了两个 PCIe switch），
- 如果 link 有一端是 CPU，那么 type 进一步更新为 PATH_PHB，最后取个 max，remPath->type = std::max (path->type, type)。
- */
 static ncclResult_t ncclTopoSetPaths(struct ncclTopoNode* baseNode, struct ncclTopoSystem* system) {
   if (baseNode->paths[baseNode->type] == NULL) {
     NCCLCHECK(ncclCalloc(baseNode->paths+baseNode->type, system->nodes[baseNode->type].count));
@@ -56,10 +44,31 @@ static ncclResult_t ncclTopoSetPaths(struct ncclTopoNode* baseNode, struct ncclT
   nodeList.count = 1; nodeList.list[0] = baseNode;
   nextNodeList.count = 0;
   struct ncclTopoLinkList* basePath;
+
+  // 通过 getPath 获取到 CPU 节点到自己的 path，然后设置 count 为 0，带宽为 LOC_WIDTH，type 为 PATH_LOC。
   NCCLCHECK(getPath(system, baseNode, baseNode->type, baseNode->id, &basePath));
   basePath->count = 0;
   basePath->width = LOC_WIDTH;
   basePath->type = PATH_LOC;
+
+  /*然后每次从nodeList中拿出一个节点node，
+   * 获取node到baseNode的路径path，然后用node去更新和node相连的节点，
+   * 遍历node的边link，获取link对端节点remNode，获取remNode到baseNode的路径remPath，
+   * 此时需要比较两个路径哪个更优，一个路径是原来的remPath，
+   * 另一个是path+link这个新路径，新路径的带宽width是path和link的带宽取个min，
+   * 如果width大于remPath->width，那么remPath更新为path+link
+   *
+路径更新后需要计算 remPath 的 type，这里有个取巧的地方是上节设置边 type 和本节设置路径 type 是对应的，
+ * 比如 LINK_PCI 等于 PATH_PIX，然后可以看到之前说的各种路径的 type 是怎么计算出来的。
+
+首先计算当前 link 作为一条路径的 type，初始化为 link 的 type，比如这个边是 LINK_PCI，那么就是 LINK_PIX，
+ 如果 remPath 的 count 大于 3 的话 type 就会更新为 PATH_PXB（但是这里有个疑问是大于 3 可能也跨过了两个 PCIe switch），
+ 如果 link 有一端是 CPU，那么 type 进一步更新为 PATH_PHB，最后取个 max，remPath->type = std::max (path->type, type)。
+
+   如果remNode不是GPU，那么将remNode添加到nextNodeList，等nodeList遍历完之后，将nextNodeList赋给nodeList继续遍历。
+然后回到ncclTopoComputePaths，还是使用ncclTopoSetPaths计算GPU节点到其他所有节点的距离
+
+ */
 
   while (nodeList.count) {
     nextNodeList.count = 0;
@@ -184,6 +193,7 @@ static ncclResult_t getLocalCpu(struct ncclTopoSystem* system, int gpu, int* ret
   return ncclSuccess;
 }
 
+//然后addCpuStep将 i1 到 i2 的路径修改为 i1 到 c 的路径 + cpu到 i2 的路径。
 static ncclResult_t addCpuStep(struct ncclTopoSystem* system, int c, int t1, int i1, int t2, int i2) {
   struct ncclTopoNode* cpuNode = system->nodes[CPU].nodes+c;
   struct ncclTopoNode* srcNode = system->nodes[t1].nodes+i1;
@@ -255,19 +265,18 @@ ncclResult_t ncclGetLevel(int* level, const char* disableEnv, const char* levelE
 }
 
 /*
- * 然后通过 ncclTopoCheckP2p 检查当前 GPU 节点和其他所有的 GPU 节点之间是否可以使用 p2p 通信，
- * 其实就是判断 gpu1 到 gpu2 的路径 type 是否满足 p2pLevel 的限制，
- * 默认 p2pLevel 是 PATH_SYS，如果用户没有通过环境变量设置的话就相当于没有限制，
- * 任意 gpu 之间都是支持 p2p 通信，另外如果路径类型为 PATH_NVL 的话，那么还支持 p2p read。
- *
- *
- *
- * 然后判断当前 GPU 和其他 GPU 是否可以通过 shm 通信，因为在 docker 环境中如果 shm 挂载的不一样就无法通信，
- * 如果无法通过 shm 通信的话就将 path 的 count 设置为 0，
- * 之后会删除掉对应节点（但是这里有个疑问，shm 不通的话为什么没有继续判断 p2p 是否可用）。
+然后通过ncclTopoCheckP2p检查当前GPU节点和其他所有的GPU节点之间是否可以使用p2p通信，
+ 其实就是判断gpu1到gpu2的路径type是否满足p2pLevel的限制，默认p2pLevel是PATH_SYS，
+ 如果用户没有通过环境变量设置的话就相当于没有限制，任意gpu之间都是支持p2p通信，
+ 另外如果路径类型为PATH_NVL的话，那么还支持p2p read。
 
-最后类似 GPU，然后对所有的 NIC 执行 ncclTopoSetPaths 计算出路径，
- 然后遍历每个 NIC 和每个 GPU，判断是否支持 gdr。
+
+然后判断当前GPU和其他GPU是否可以通过shm通信，因为在docker环境中如果shm挂载的不一样就无法通信，
+ 如果无法通过shm通信的话就将path的count设置为0，之后会删除掉对应节点
+ （但是这里有个疑问，shm不通的话为什么没有继续判断p2p是否可用）。
+
+最后类似GPU，然后对所有的NIC执行ncclTopoSetPaths计算出路径，然后遍历每个NIC和每个GPU，判断是否支持gdr。
+
  * */
 int ncclTopoUserP2pLevel = -1;
 ncclResult_t ncclTopoCheckP2p(struct ncclTopoSystem* system, int64_t id1, int64_t id2, int* p2p, int *read) {
@@ -320,27 +329,29 @@ compare:
 NCCL_PARAM(NetGdrRead, "NET_GDR_READ", -2);
 int ncclTopoUserGdrLevel = -1;
 /*
- 这里除了看之前判断是否支持 gdr 之外，还要看 GPU 和 NIC 之间的距离是否小于 netGdrLevel，netGdrLevel 默认是 PATH_PXB，用户也可以自定义，默认值为 PXB 的原因可见官方文档：
+这里除了看之前判断是否支持gdr之外，还要看GPU和NIC之间的距离是否小于netGdrLevel，
+ netGdrLevel默认是PATH_PXB，用户也可以自定义，默认值为PXB的原因可见官方文档：
 
-Even though the only theoretical requirement for GPUDirect RDMA to work between a third-party device and
- an NVIDIA GPU is that they share the same root complex, there exist bugs (mostly in chipsets)
- causing it to perform badly, or not work at all in certain setups.
+Even though the only theoretical requirement for GPUDirect RDMA to work between
+ a third-party device and an NVIDIA GPU is that they share the same root complex,
+ there exist bugs (mostly in chipsets) causing it to perform badly, or not work at all in certain setups.
 
 We can distinguish between three situations, depending on what is on the path between the GPU and the third-party device:
+    PCIe switches only
+    single CPU/IOH
+    CPU/IOH <-> QPI/HT <-> CPU/IOH
 
-PCIe switches only
-single CPU/IOH
-CPU/IOH <-> QPI/HT <-> CPU/IOH
-The first situation, where there are only PCIe switches on the path, is optimal and yields the best performance.
+The first situation, where there are only PCIe switches on the path,
+ is optimal and yields the best performance.
  The second one, where a single CPU/IOH is involved, works,
- but yields worse performance ( especially peer-to-peer read bandwidth has been shown to be severely limited on some processor architectures ).
- Finally, the third situation, where the path traverses a QPI/HT link, may be extremely performance-limited or even not work reliably.
+ but yields worse performance
+ ( especially peer-to-peer read bandwidth has been shown to be severely limited on some processor architectures ).
+ Finally, the third situation, where the path traverses a QPI/HT link,
+ may be extremely performance-limited or even not work reliably.
 
-可以看到在只有经过 PCIe switch 的时候性能最好，在经过 CPU 的时候性能较差，在跨 numa 的时候性能很差，甚至不可用。
+可以看到在只有经过PCIe switch的时候性能最好，在经过CPU的时候性能较差，在跨numa的时候性能很差，甚至不可用。
 
-当 p2p 或者 gdr 不支持的时候，会通过 CPU 进行中转，通过 getLocalCpu 找到最近的 CPU c。
-
- 然后 addCpuStep 将 i1 到 i2 的路径修改为 i1 到 c 的路径 + cpu 到 i2 的路径。
+当p2p或者gdr不支持的时候，会通过CPU进行中转，通过getLocalCpu找到最近的CPU c。
 
  */
 ncclResult_t ncclTopoCheckGdr(struct ncclTopoSystem* system, int64_t busId, int netDev, int read, int* useGdr) {
@@ -391,38 +402,28 @@ ncclResult_t ncclTopoCheckGdr(struct ncclTopoSystem* system, int64_t busId, int 
   return ncclSuccess;
 }
 
-/*
-首先通过 ncclTopoRemovePathType 将所有 node 中的 paths 清空。
-
-ncclTopoSetPaths 作用就是计算出其他所有节点到 baseNode 的 path，这里遍历所有的 CPU 节点，
-计算出其他所有节点到所有 CPU 节点的路径。
-
-ncclTopoSetPaths 实现类似 SPFA，由于这个版本的 NCCL 不允许 GPU 作为路径的中间节点，
- 所以在 SPFA 的过程中不会将 GPU 节点添加到队列中更新其他节点，
- 相当于这个无向图没有环，因此这个场景下的 SPFA 过程也就相当于 BFS。
-
-这里 baseNode 就是 CPU 节点，先分配 CPU 到 CPU path 的空间，nodeList 和 nextNodeList 就是队列的作用，
-先将 baseNode 入队列。
-
-getPath 函数是获取 node 中到 type 为 t 的第 id 个节点的路径 path。
-
-如果 remNode 不是 GPU，那么将 remNode 添加到 nextNodeList，等 nodeList 遍历完之后，
-将 nextNodeList 赋给 nodeList 继续遍历。
-
-然后回到 ncclTopoComputePaths，还是使用 ncclTopoSetPaths 计算 GPU 节点到其他所有节点的距离。
- */
 ncclResult_t ncclTopoComputePaths(struct ncclTopoSystem* system, struct ncclPeerInfo* peerInfos) {
   // Precompute paths between GPUs/NICs.
 
   // Remove everything in case we're re-computing
+  //首先通过 ncclTopoRemovePathType 将所有 node 中的 paths 清空。
   for (int t=0; t<NCCL_TOPO_NODE_TYPES; t++) ncclTopoRemovePathType(system, t);
 
   // Set direct paths from/to CPUs. We need them in many cases.
+  /*
+    ncclTopoSetPaths作用就是计算出其他所有节点到baseNode的path，这里遍历所有的CPU节点，
+    计算出其他所有节点到所有CPU节点的路径
+    ncclTopoSetPaths实现类似SPFA，由于这个版本的NCCL不允许GPU作为路径的中间节点，
+    所以在SPFA的过程中不会将GPU节点添加到队列中更新其他节点，相当于这个无向图没有环，
+    因此这个场景下的SPFA过程也就相当于BFS
+    这里baseNode就是CPU节点，先分配CPU到CPU path的空间，nodeList和nextNodeList就是队列的作用，
+    先将baseNode入队列
+   */
   for (int c=0; c<system->nodes[CPU].count; c++) {
     NCCLCHECK(ncclTopoSetPaths(system->nodes[CPU].nodes+c, system));
   }
 
-  // Set direct paths from/to GPUs.
+  // Set direct paths from/to GPUs.  使用ncclTopoSetPaths计算GPU节点到其他所有节点的距离
   for (int g=0; g<system->nodes[GPU].count; g++) {
     // Compute paths to GPU g
     NCCLCHECK(ncclTopoSetPaths(system->nodes[GPU].nodes+g, system));
@@ -475,13 +476,13 @@ ncclResult_t ncclTopoComputePaths(struct ncclTopoSystem* system, struct ncclPeer
   return ncclSuccess;
 }
 
-//接下来会通过 ncclTopoTrimSystem 删除图中不可达的 GPU 节点和用不到的 NIC。
-/*
- * 首先通过类似并查集的思路将多个 GPU 节点合并成多个集合，myDomain 为当前 rank 的 GPU 所对应的集合号，
- * 然后将不属于 myDomain 集合的 GPU 节点在图中删除掉，
- * 最后判断下如果 comm 的 rank 数等于当前图中的 gpu 节点数，那么说明不需要网卡，所以也将网卡从图中删除。
 
-得到新的图结构后再重新执行一次 ncclTopoComputePaths 就得到最终各个节点之间的路径了。
+/*
+首先通过类似并查集的思路将多个GPU节点合并成多个集合，myDomain为当前rank的GPU所对应的集合号，
+ 然后将不属于myDomain集合的GPU节点在图中删除掉，最后判断下如果comm的rank数等于当前图中的gpu节点数，
+ 那么说明不需要网卡，所以也将网卡从图中删除。
+
+得到新的图结构后再重新执行一次ncclTopoComputePaths就得到最终各个节点之间的路径了。
  */
 ncclResult_t ncclTopoTrimSystem(struct ncclTopoSystem* system, struct ncclComm* comm) {
   int *domains;
