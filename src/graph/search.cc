@@ -23,17 +23,8 @@ static float getMaxWidth(struct ncclTopoSystem* system, struct ncclTopoNode* gpu
   return maxWidth;
 }
 /*
- * 上节讲到已经计算出GPU和NIC节点到其他任意节点的最优路径了，本节看下NCCL中channel的搜索过程。
-
-nccl中channel的概念表示一个通信路径，为了更好的利用带宽和网卡，以及同一块数据可以通过多个channel并发通信，
- 另外后续可以看到一个channel对应了一个GPU SM，
- 所以基于这些原因，nccl会使用多channel，搜索的过程就是搜索出来一组channel。
-
-如上节所述，单机的情况下会在ncclTopoTrimSystem函数里删除网卡，
- 因此我们先看下单机八卡这种简化的情况，最后再看下多机引入网卡之后的情况。
-
-
- ncclTopoSearchInit就是初始化system->maxWidth，如果是单机单卡的情况，那么maxWidth设置为LOC_WIDTH，
+ ncclTopoSearchInit就是初始化system->maxWidth，
+ 如果是单机单卡的情况，那么maxWidth设置为LOC_WIDTH，
  否则就遍历每个GPU节点，查看到其他所有GPU节点或者网卡最大带宽。
  */
 ncclResult_t ncclTopoSearchInit(struct ncclTopoSystem* system) {
@@ -397,6 +388,7 @@ ncclResult_t ncclTopoSearchRecGpu(struct ncclTopoSystem* system, struct ncclTopo
     for (int i=0; i<count; i++) {
       NCCLCHECK(ncclTopoSearchTryGpu(system, graph, saveGraph, step+1, backToNet, backToFirstRank, forcedOrder, time, GPU, g, next[i]));
     }
+      //到这里就完成了第一次搜索，如前文所述，如果搜索出来的结果没有达到条件，就开始逐步降低条件继续搜索，接下来的过程比较类似，就不再赘述了。
   } else if (step == backToFirstRank) {
     // Find first GPU and loop back to it
     int p;
@@ -695,9 +687,8 @@ ncclResult_t ncclTopoGetXmlFromGraphs(int ngraphs, struct ncclTopoGraph** graphs
 float speedArray[] = { 42.0, 24.0, 21.0, 18.0, 15.0, 12.0, 10.0, 9.0, 7.0, 6.0, 5.0, 4.0, 3.0, 2.4, 1.2, 0.24, 0.12 };
 #define NSPEEDS (sizeof(speedArray)/sizeof(float))
 
-/*ncclTopoGraph记录了搜索到的结果，具体含义见注释。
-
-然后看下ncclTopoCompute，这里就是实际搜索channel的过程，目标是搜索出来尽可能多，带宽尽可能大的一系列channel，
+/*
+ncclTopoCompute，这里就是实际搜索channel的过程，目标是搜索出来尽可能多，带宽尽可能大的一系列channel，
  本质就是暴力搜索，先设置一系列的条件搜答案，如果搜不出来则降低条件继续搜。
 
 由于此时没有NET节点，所以crossNic为0，然后初始化graph，首先设置最高的条件，限制节点内部只能使用不超过PATH_NVL路径，

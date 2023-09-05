@@ -53,8 +53,9 @@ ncclResult_t ncclTopoSearchInit(struct ncclTopoSystem* system);
 #define NCCL_TOPO_PATTERN_SPLIT_TREE 2      // Split tree (send/recv from different ranks) flowing in both directions
 #define NCCL_TOPO_PATTERN_TREE 3            // Simple tree (send/recv from same rank) flowing in both directions
 #define NCCL_TOPO_PATTERN_RING 4            // Ring
-struct ncclTopoGraph {
+struct ncclTopoGraph {  //记录了搜索到的结果
   // Input / output
+  //nccl执行集合通信时支持ring，tree和collnet三种算法，这里我们以ring来举例，后续专门介绍ring和tree。
   int id; // ring : 0, tree : 1, collnet : 2
   int pattern;
   int crossNic;
@@ -62,7 +63,7 @@ struct ncclTopoGraph {
   int minChannels;
   int maxChannels;
   // Output
-  // 搜索到的channel数量
+  int nChannels;     // 搜索到的channel数量
   float speedIntra;  // 节点内单个channel带宽
   float speedInter;  // 节点间单个channel带宽
     int typeIntra;      // 节点内channel的路径类型

@@ -1,4 +1,5 @@
 https://blog.csdn.net/kidgin7439/category_11998768.html  和知乎同名的
+
 NVIDIA NCCL 源码学习（十）- 多机间ncclSend和ncclRecv的过程
 https://blog.csdn.net/KIDGIN7439/article/details/130936177
 回忆一下单机的执行流程，用户执行ncclSend之后通过ncclEnqueueCheck将sendbuff，sendbytes，peer等信息保存到了comm->p2plist中；
@@ -25,8 +26,15 @@ https://blog.csdn.net/kidgin7439/article/details/126953432
 
 NVIDIA NCCL 源码学习（七）- 机器间channel连接
 https://blog.csdn.net/KIDGIN7439/article/details/128144057
+
 NVIDIA NCCL 源码学习（六）- channel搜索
 https://zhuanlan.zhihu.com/p/653440728
+==上节讲到已经计算出GPU和NIC节点到其他任意节点的最优路径了，本节看下NCCL中channel的搜索过程。
+nccl中channel的概念表示一个通信路径，为了更好的利用带宽和网卡，以及同一块数据可以通过多个channel并发通信，
+另外后续可以看到一个channel对应了一个GPU SM， 所以基于这些原因，nccl会使用多channel，搜索的过程就是搜索出来一组channel。
+如上节所述，单机的情况下会在ncclTopoTrimSystem函数里删除网卡，
+因此我们先看下单机八卡这种简化的情况，最后再看下多机引入网卡之后的情况。
+总结一下，本节就是基于机器拓扑，搜索出一组channel用于数据的通信，并记录到ncclTopoGraph。
 
 NVIDIA NCCL 源码学习（五）- 路径计算
 https://my.oschina.net/oneflow/blog/10089670
