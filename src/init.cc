@@ -685,7 +685,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, ncclUniqueId* comm
     struct ncclGraphInfo collNet;
     struct ncclTopoRanks topoRanks;
   } *allGather3Data;
-//allGather3Data用于rank间聚合channel的信息，ncclGraphInfo记录了环的信息，比如speed和type
+  //allGather3Data用于rank间聚合channel的信息，ncclGraphInfo记录了环的信息，比如speed和type
   NCCLCHECK(ncclCalloc(&allGather3Data, nranks));
   allGather3Data[rank].cudaCompCap = ncclCudaCompCap();
   allGather3Data[rank].nChannels = comm->nChannels = treeGraph.nChannels = ringGraph.nChannels =
@@ -706,7 +706,12 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, ncclUniqueId* comm
   NCCLCHECK(ncclTopoPreset(comm, &treeGraph, &ringGraph, &collNetGraph, &allGather3Data[rank].topoRanks));
 
   NCCLCHECK(bootstrapAllGather(comm->bootstrap, allGather3Data, sizeof(*allGather3Data)));
+/*
+ * 然后通过bootstrapAllGather获取全局的allGather3Data信息，计算出当前rank所在的node保存在comm->node，以及每个node的第一个rank保存在nodesFirstRank，因此例子中：
 
+nodesFirstRank[0]: 0
+nodesFirstRank[1]: 10
+ */
   // Determine nNodes, firstRanks, ...
   int* nodesFirstRank;
   NCCLCHECK(ncclCalloc(&nodesFirstRank, nranks));
@@ -760,7 +765,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, ncclUniqueId* comm
 
   int *rings;
   NCCLCHECK(ncclCalloc(&rings, nranks*MAXCHANNELS));
-
+  // //然后开始将每个机器的环首尾相连组成大环。
   NCCLCHECK(ncclTopoPostset(comm, nodesFirstRank, allTopoRanks, rings));
   if (comm->nNodes > 1 &&
       ncclParamCollNetEnable() == 1 &&
@@ -813,6 +818,8 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, ncclUniqueId* comm
     struct ncclChannel* channel = comm->channels+c;
     NCCLCHECKGOTO(setupChannel(comm, c, rank, nranks, rings+c*nranks), ret, affinity_restore);
     if (comm->nRanks == 1) continue;
+    /* 然后执行ncclTransportP2pSetup建立当前rank和prev，next的通信链路。
+到这里就完成了机器之间channel的连接，下节会了解到通信链路的建立过程。*/
     NCCLCHECKGOTO(ncclTransportP2pSetup(comm, &ringGraph, channel, 1, &channel->ring.prev, 1, &channel->ring.next), ret, affinity_restore);
     NCCLCHECKGOTO(ncclTransportP2pSetup(comm, &treeGraph, channel, NCCL_MAX_TREE_ARITY, channel->treeUp.down, 1, &channel->treeUp.up), ret, affinity_restore);
     NCCLCHECKGOTO(ncclTransportP2pSetup(comm, &treeGraph, channel, 1, &channel->treeDn.up, NCCL_MAX_TREE_ARITY, channel->treeDn.down), ret, affinity_restore);

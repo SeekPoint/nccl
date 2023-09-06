@@ -26,6 +26,14 @@ https://blog.csdn.net/kidgin7439/article/details/126953432
 
 NVIDIA NCCL 源码学习（七）- 机器间channel连接
 https://blog.csdn.net/KIDGIN7439/article/details/128144057
+上节中完成了单机内部的channel搜索，仍然以ringGraph为例的话，相当于在单台机器内部搜索出来了一系列的环，接下来需要将机器之间的环连接起来。
+为了方便理解假设两机十六卡的情况下第一台机器的一个ring为：
+graph->intra: GPU/0 GPU/7 GPU/6 GPU/3 GPU/2 GPU/5 GPU/4 GPU/1
+graph->inter: NET/0 NET/0
+第二个机器对应的ring为：
+graph->intra: GPU/10 GPU/9 GPU/8 GPU/13 GPU/12 GPU/15 GPU/14 GPU/11
+graph->inter: NET/0 NET/0
+
 
 NVIDIA NCCL 源码学习（六）- channel搜索
 https://zhuanlan.zhihu.com/p/653440728

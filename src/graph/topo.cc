@@ -660,6 +660,13 @@ ncclResult_t ncclTopoCpuType(struct ncclTopoSystem* system, int* arch, int* vend
 
 NCCL_PARAM(IgnoreCpuAffinity, "IGNORE_CPU_AFFINITY", 0);
 
+/*接下来每个rank都要为通信分配一些内存，为了提高性能，
+ * 这里会在分配buffer之前设置cpu亲和性，使得分配的内存尽量是当前numa本地的。
+ * 首先获取当前线程的cpu亲和性保存到affinitySave，分配好buffer之后会用affinitySave来恢复亲和性。
+
+  然后通过ncclTopoSetAffinity设置cpu亲和性，找到当前rank对应的cpu节点之后，可以获取到该cpu对应的core，即cpuMask，
+ 然后获取当前线程对应的亲和性，即mask，默认会取cpuMask和mask的交集finalMask，如果交集不为空的话，会将finalMask设置给当前线程。
+ */
 ncclResult_t ncclTopoSetAffinity(struct ncclTopoSystem* system, int rank) {
   struct ncclTopoNode* cpu = NULL, *gpu = NULL;
   for (int g=0; g<system->nodes[GPU].count; g++) {
