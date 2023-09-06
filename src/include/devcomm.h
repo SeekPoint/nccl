@@ -172,9 +172,9 @@ struct ncclColl {
   union {
     struct {
       struct CollectiveArgs args;
-      uint16_t funcIndex;
-      uint16_t nextIndex;
-      uint8_t  active;
+      uint16_t funcIndex;  // 应该使用哪个kernel
+      uint16_t nextIndex;  // 下一个ncclColl
+      uint8_t  active;     // 当前ncclColl是否被占用
     };
     int data[0x10];
   };

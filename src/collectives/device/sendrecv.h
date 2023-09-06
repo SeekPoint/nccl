@@ -7,7 +7,14 @@
 #include "devcomm.h"
 #include "primitives.h"
 #include "collectives.h"
+/*
+ * 首先计算nthreads，这里为128，从args中获取到sendbuff和recvbuff，
+ * 如果delta小于0，说明这个channel没有p2p操作，
+ * 是fake的，因此直接return即可，如果delta为0，
+ * 那么就是同卡之间的send/recv，那么直接通过ReduceOrCopyMulti执行数据的拷贝，每次拷贝长度为blockSize
+*/
 
+//这里可以看到之前说的320线程中160个线程用于send，160线程用于recv，send和recv线程都实例化了一个ncclPrimitives，通过directSend发送数据，通过directRecv接收数据。
 template<int UNROLL, class FUNC, typename T>
 __device__ void ncclSendRecvKernel(struct CollectiveArgs* args) {
   const int tid = threadIdx.x;

@@ -263,6 +263,15 @@ __device__ __forceinline__ void ReduceCopyMulti(const int tid, const int nthread
   }
 }
 
+/*
+ * ReduceCopy128bMulti使用向量化指令拷贝的过程，这里的load/store使用了内联PTX，
+ * 不过感觉并没有必要。Fetch128就是从p指向的位置load一个ulong2到寄存器变量v里。
+ * 这里有一个变量UNROLL，一个warp一次处理连续的UNROLL * WARP_SIZE个ulong2，其实就是类似循环展开的作用，
+ * 当UNROLL为4的时候访存模式如下图 004-003.png，
+ * 比如线程0的话会将4个黄框的第一个ulong2读取到寄存器变量vals，然后写到dst。
+ *
+特别的当UNROLL为1的时候，访存模式和ReduceCopyMulti类似，即128线程处理连续的128个ulong2，然后接着循环执行下一个128个ulong2。
+ */
 template<class FUNC, typename T, int UNROLL, int MINSRCS, int MAXSRCS, int MINDSTS, int MAXDSTS>
 __device__ __forceinline__ void ReduceCopy128bMulti( const int w, const int nw, const int t,
     int nsrcs, const T* s[MAXSRCS], int ndsts, T* d[MAXDSTS],
@@ -312,7 +321,17 @@ __device__ int ptrAlign128(T* ptr) { return (uint64_t)ptr % alignof(Pack128); }
 // Try to limit consecutive load/stores to 8.
 // Use UNROLL 8 when we have a single source and a single destination, 4 otherwise
 #define AUTOUNROLL (UNROLL*(4/(MINDSTS+MINSRCS)))
-
+/*负责实际数据拷贝，将nsrcs个源数组通过FUNC规约后拷贝到ndsts个目标数组中，每个数组长度都为N。
+ * ReduceOrCopyMulti会尝试使用128位向量化load/store来提高带宽利用率，并减少指令数量以提高性能，
+ * 但是前提是待处理的数据是对齐的（16字节），如果src和dst不是16字节对齐的，但是对16取模后是一样的，
+ * 那么可以先通过非向量化指令拷贝前面没对齐的数据，之后的数据就可以用向量化指令处理了；
+ * 如果取模后也不一样，那就只能用非向量化指令进行拷贝了。
+ * 整体分为三步骤，先处理前边未对齐的，然后处理中间对齐的数据，最后处理尾部数据。
+ * ptrAlign128就是对16字节取模，首先通过异或判断srcs和dsts的首地址对齐是否一致，
+ * 如果不一致，那么Npreamble = N，后续都需要用非向量化指令拷贝，
+ 否则Npreamble = (alignof(Pack128) - align) % alignof(Pack128)，
+ 即前面未对齐的一部分。
+ */
 template<int UNROLL, class FUNC, typename T, int MINSRCS, int MAXSRCS, int MINDSTS, int MAXDSTS>
 __device__ __forceinline__ void ReduceOrCopyMulti(const int tid, const int nthreads,
     int nsrcs, const T* srcs[MAXSRCS], int ndsts, T* dsts[MAXDSTS],
@@ -335,6 +354,7 @@ __device__ __forceinline__ void ReduceOrCopyMulti(const int tid, const int nthre
 
   // stage 1: preamble: handle any elements up to the point of everything coming
   // into alignment
+  //对于未对齐的这部分数据，直接使用ReduceCopyMulti通过非向量化指令拷贝即可，128线程从src中读取连续的128个int8_t，然后存到dst，循环执行。访问模式如004-002.png
   if (Npreamble) {
     ReduceCopyMulti<FUNC, T, MINSRCS, MAXSRCS, MINDSTS, MAXDSTS>(tid, nthreads, nsrcs, srcs, ndsts, dsts, 0, Npreamble);
     Nrem -= Npreamble;
@@ -351,6 +371,9 @@ __device__ __forceinline__ void ReduceOrCopyMulti(const int tid, const int nthre
   const int packFactor = sizeof(Pack128) / sizeof(T);
 
   // stage 2a: main loop
+  //处理对齐的部分数据，这里分为两步，
+  // 首先对于整除packFactor  * AUTOUNROLL * WARP_SIZE的部分数据可以开启AUTOUNROLL执行ReduceCopy128bMulti，
+  // 对于剩余的部分设置AUTOUNROLL为1执行ReduceCopy128bMulti。
   int Npack2a = (Nrem / (packFactor * AUTOUNROLL * WARP_SIZE))
       * (AUTOUNROLL * WARP_SIZE); // round down
   int Nelem2a = Npack2a * packFactor;
@@ -373,7 +396,7 @@ __device__ __forceinline__ void ReduceOrCopyMulti(const int tid, const int nthre
   if (Nrem == 0) return;
   offset += Nelem2b;
 
-  // stage 2c: tail
+  // stage 2c: tail  最后对于不足packFactor，就是说最后凑不够128位的数据还是使用ReduceCopyMulti进行非向量化拷贝
   ReduceCopyMulti<FUNC, T, MINSRCS, MAXSRCS, MINDSTS, MAXDSTS>(tid, nthreads, nsrcs, srcs, ndsts, dsts, offset, Nrem);
 }
 

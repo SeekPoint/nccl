@@ -91,6 +91,13 @@ ncclResult_t ncclAsyncInit(ncclInitFunc_t func, ncclComm_t* newcomm, int ndev, n
   return ncclSuccess;
 }
 
+/*
+ * ncclGroupArgs和ncclGroupIndex是thread_local的变量，
+ * 表示一共有ncclGroupIndex个AsyncArgs；
+ * 这里会对比当前ncclGroupArgs里边是否有当前comm的AsyncArgs，
+ * 如果没有则新加一个，设置funcType为ASYNC_FUNC_COLL，
+ * 设置comm。
+*/
 ncclResult_t ncclAsyncColl(ncclComm_t comm) {
   struct ncclAsyncArgs* args = ncclGroupArgs;
   for (int i=0; i<ncclGroupIndex; i++) {
@@ -125,6 +132,12 @@ When managing multiple GPUs from a single thread,
 
 //组开始操作，其后的操作不使用cpu同步.
 //start a group call. All subsequent calls to NCCL may not block due to inter-CPU synchronization.
+/*
+ * ncclGroupStart只是对ncclGroupMode加一，
+ * ncclGroupMode非0表示处于Group操作中，
+ * GroupStart和GroupEnd间的操作不会阻塞，
+ * 最后通过GroupEnd一次性提交操作。
+ * */
 NCCL_API(ncclResult_t, ncclGroupStart);
 ncclResult_t ncclGroupStart() {
   if (ncclGroupMode == 0) {
@@ -143,6 +156,8 @@ static ncclResult_t scheduleSendRecv(struct ncclComm* comm, int delta, int chann
   info.sendbytes = sendbytes;
   info.recvbytes = recvbytes;
   if (delta == 0 && sendbytes != recvbytes) return ncclInvalidUsage;
+  //然后通过ncclSaveKernel设置kernel相关参数，即ncclColl，
+  // 图一中的args类型就是ncclColl，第七节中讲到在initChannel的时候会为每个channel申请collectives，即ncclColl数组。
   NCCLCHECK(ncclSaveKernel(&info));
   return ncclSuccess;
 }
@@ -212,6 +227,8 @@ ncclResult_t ncclGroupEnd() {
         for (int c=0; c<comm->p2pnChannels; c++)
           args->coll.connect += comm->p2plist.connect.nsend[c] + comm->p2plist.connect.nrecv[c];
         if (args->coll.connect) {
+            //对每个AsyncArgs启动一个线程执行ncclAsyncThreadPreconnect，
+            // 这里对每个p2p channel都要执行ncclTransportP2pSetup，nsend，send等相关信息都记录在了p2plist。
           pthread_create(ncclGroupThreads+i, NULL, ncclAsyncThreadPreconnect, args);
         }
       }
@@ -230,6 +247,11 @@ ncclResult_t ncclGroupEnd() {
     }
   }
 
+/*然后开始将所有的ncclSend和ncclRecv任务分发到各个channel，
+ * 遍历每个AsyncArgs的每个delta，得到send给谁(to)，
+ * 从哪里接收(from)，然后使用p2pnChannelsPerPeer个channel并行收发，每个channel负责sendbytes / p2pnChannelsPerPeer大小。
+ * 按照上述例子的话，rank0(第一个AsyncArgs)将会执行两次scheduleSendRecv，
+ * 第一个是from=to=0，第二个是from=to=1。*/
   for (int i=0; i<ncclGroupIndex; i++) {
     struct ncclAsyncArgs* args = ncclGroupArgs+i;
     if (args->funcType == ASYNC_FUNC_COLL) {
@@ -263,6 +285,7 @@ ncclResult_t ncclGroupEnd() {
             if (recvbytes > recvChunkSize) { remaining = 1; recvbytes = recvChunkSize; } else p2plist->peerlist[from].recvbytes = -1;
             if (sendbytes > sendChunkSize) { remaining = 1; sendbytes = sendChunkSize; } else p2plist->peerlist[to].sendbytes = -1;
             if (sendbytes >= 0 || recvbytes >= 0) {
+                //然后生成一个ncclInfo，记录下channelId，sendbuff，recvbuff等信息，执行ncclSaveKernel。
               NCCLCHECKGOTO(scheduleSendRecv(comm, delta, channelId,
                     recvbytes, ((char*)(p2plist->peerlist[from].recvbuff)) + recvOffset,
                     sendbytes, ((const char*)(p2plist->peerlist[to].sendbuff)) + sendOffset), ret, end);
@@ -286,6 +309,7 @@ ncclResult_t ncclGroupEnd() {
    * prevent some ranks from launching their network threads, which would
    * prevent the NCCL call from completing, blocking the cudaFree call.
    */
+  //这里会对每个AsyncArgs执行ncclBarrierEnqueue
   for (int i=0; i<ncclGroupIndex; i++) {
     struct ncclAsyncArgs* args = ncclGroupArgs+i;
     if (args->funcType == ASYNC_FUNC_COLL) {

@@ -8,6 +8,9 @@ https://blog.csdn.net/litdaguang/article/details/55259389
 Fast Multi-GPU collectives with NCCL-翻译
 
 
+yk:
+NCCL_API 修饰的都是向外提供的API
+
 https://zhuanlan.zhihu.com/p/609121884
 【微软】MSCCL Github仓库介绍
 https://github.com/Mellanox/nccl-rdma-sharp-plugins

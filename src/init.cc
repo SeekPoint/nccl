@@ -363,6 +363,7 @@ ncclResult_t ncclCommSetIntra(struct ncclComm* comm, int rank, int ranks, struct
     assert(comm == comm0);
     int* bar;
     NCCLCHECK(ncclCalloc(&bar, 2));
+    //intraBarrier用于cpu的同步，这里可以看到intraBarrier，intraParams其实都是用的intraRank0的。
     bar[0] = bar[1] = 0;
     comm->intraBarrier = bar;
     NCCLCHECK(ncclCalloc(&comm->intraParams, comm->intraRanks));
@@ -861,6 +862,12 @@ affinity_restore:
   sched_setaffinity(0, sizeof(cpu_set_t), &affinitySave);
   if (ret != ncclSuccess) return ret;
 
+  /*
+   * 在initTransportsRank的最后会设置参数，
+   * intraRank0表示当前机器的第一个rank是谁，
+   * intraRanks表示当前机器上有几个rank，
+   * intraRank表示当前rank在当前机器是第几个。
+   * */
   // Compute intra ranks (using AllGather1 data)
   int intraRank0 = -1, intraRank = -1, intraRanks = 0;
   for (int i = 0; i < nranks; i++) {
@@ -878,6 +885,7 @@ affinity_restore:
          rank, allGather1Data[rank].peerInfo.hostHash, intraRank, intraRanks, intraRank0);
     return ncclInternalError;
   }
+  ////通过initParam完成了args，myParam的设置，如图一。
   NCCLCHECK(ncclCommSetIntra(comm, intraRank, intraRanks, allGather1Data[intraRank0].comm));
 
   // Done with AllGather1 data

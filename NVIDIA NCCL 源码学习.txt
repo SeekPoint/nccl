@@ -11,9 +11,113 @@ https://blog.csdn.net/KIDGIN7439/article/details/130936177
 kernel和proxy间通过队列实现生产者消费者模式
 send端通过rdma send发送数据，和recv端通过队列实现生产者消费者模式，队列位于send端，recv端每次下发一个wr到rq之后会执行rdma write通知send端
 
+
+
 NVIDIA NCCL 源码学习（九）- 单机内ncclSend和ncclRecv的过程
 https://blog.csdn.net/KIDGIN7439/article/details/128326053
+上节介绍了通信链路的建立过程，本节介绍下单机内部ncclSend和ncclRecv的运行过程。
 单机内的通信都是通过kernel来进行的，所以整个通信的过程可以分为两步，第一步是准备kernel相关的参数，第二步是实际执行kernel的过程。
+为方便表述，下边例子不加说明的话均为单机单线程两卡的场景，测试用例如下。
+#include <stdio.h>
+#include "cuda_runtime.h"
+#include "nccl.h"
+#include <unistd.h>
+#include <stdint.h>
+
+#define CUDACHECK(cmd) do {                         \
+    cudaError_t e = cmd;                              \
+    if( e != cudaSuccess ) {                          \
+        printf("Failed: Cuda error %s:%d '%s'\n",             \
+                __FILE__,__LINE__,cudaGetErrorString(e));   \
+        exit(EXIT_FAILURE);                             \
+    }                                                 \
+} while(0)
+
+
+#define NCCLCHECK(cmd) do {                         \
+    ncclResult_t r = cmd;                             \
+    if (r!= ncclSuccess) {                            \
+        printf("Failed, NCCL error %s:%d '%s'\n",             \
+                __FILE__,__LINE__,ncclGetErrorString(r));   \
+        exit(EXIT_FAILURE);                             \
+    }                                                 \
+} while(0)
+
+
+int main(int argc, char* argv[])
+{
+    //each process is using two GPUs
+    int nDev = 2;
+    int nRanks = nDev;
+
+    int chunk = 1024*1024;
+    int size = nDev * chunk;
+
+    float** sendbuff = (float**)malloc(nDev * sizeof(float*));
+    float** recvbuff = (float**)malloc(nDev * sizeof(float*));
+    cudaStream_t* s = (cudaStream_t*)malloc(sizeof(cudaStream_t)*nDev);
+
+    //picking GPUs based on localRank
+    for (int i = 0; i < nDev; ++i) {
+        CUDACHECK(cudaSetDevice(i));
+        CUDACHECK(cudaMalloc(sendbuff + i, size * sizeof(float)));
+        CUDACHECK(cudaMalloc(recvbuff + i, size * sizeof(float)));
+        CUDACHECK(cudaMemset(sendbuff[i], 1, size * sizeof(float)));
+        CUDACHECK(cudaMemset(recvbuff[i], 0, size * sizeof(float)));
+        CUDACHECK(cudaStreamCreate(s+i));
+    }
+
+    ncclUniqueId id;
+    ncclComm_t comms[nDev];
+    //generating NCCL unique ID at one process and broadcasting it to all
+    ncclGetUniqueId(&id);
+
+    //initializing NCCL, group API is required around ncclCommInitRank as it is
+    //called across multiple GPUs in each thread/process
+    NCCLCHECK(ncclGroupStart());
+    for (int i=0; i<nDev; i++) {
+        CUDACHECK(cudaSetDevice(i));
+        NCCLCHECK(ncclCommInitRank(comms+i, nRanks, id, i));
+    }
+    NCCLCHECK(ncclGroupEnd());
+
+    //calling NCCL communication API. Group API is required when using
+    //multiple devices per thread/process
+    NCCLCHECK(ncclGroupStart());
+    for (int i=0; i<nDev; i++) {
+        for (int j = 0; j < nDev; j++) {
+                NCCLCHECK(ncclSend((const void*)(sendbuff[i] + j * chunk), chunk, ncclFloat, j, comms[i], s[i]));
+                NCCLCHECK(ncclRecv((void*)(recvbuff[i] + j * chunk), chunk, ncclFloat, j, comms[i], s[i]));
+        }
+    }
+    NCCLCHECK(ncclGroupEnd());
+
+    //synchronizing on CUDA stream to complete NCCL communication
+    for (int i=0; i<nDev; i++)
+        CUDACHECK(cudaStreamSynchronize(s[i]));
+
+    //freeing device memory
+    for (int i=0; i<nDev; i++) {
+        CUDACHECK(cudaFree(sendbuff[i]));
+        CUDACHECK(cudaFree(recvbuff[i]));
+    }
+
+    //finalizing NCCL
+    for (int i=0; i<nDev; i++) {
+        ncclCommDestroy(comms[i]);
+    }
+
+    return 0;
+}
+通信参数准备
+先看下通信参数准备的过程，陷入细节之前我们先看下整体样貌。
+004-001.png
+最下边send0和recv0表示用户为rank0准备的数据buffer
+
+
+yk===
+5,6,7,8可能需要结合具体硬件来理解！！！！
+
 
 NVIDIA NCCL 源码学习（八）- 数据通信链路transport的建立
 https://blog.csdn.net/kidgin7439/article/details/126953432

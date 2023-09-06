@@ -32,6 +32,12 @@ static __device__ void load_parallel(void* dst, void* src, size_t size, int tid)
   int* s = (int*)src;
   for (int o = tid; o < (size/sizeof(int)); o += blockDim.x) d[o] = s[o];
 }
+
+/*第一个ncclColl通过参数传入了kernel，
+ * 所以第0个block的c可以直接设置为firstcoll，
+ * 其他的block则需要load_coll进行拷贝，
+ * load结束后可以设置host的ncclColl的active为0。
+ * */
 static __device__ void load_coll(struct ncclColl* localColl, struct ncclColl* hostColl, int tid, struct ncclDevComm* comm) {
   // Check whether the last operation was aborted and make sure all threads exit
   int abort = tid == 0 ? *(comm->abortFlag) : 0;
@@ -49,6 +55,13 @@ __device__ void NCCL_COLL_NAME(coll, op, dtype)(struct CollectiveArgs* args) { \
   coll##Kernel<COLL_UNROLL, ncclFunc<ctype>, ctype>(args); \
 }
 
+/*
+ * 然后开始while循环遍历执行每一个ncclColl，直到ncclColl的active为2，表示这是最后一个，此时会退出循环。
+ * 对每个ncclColl会执行ncclSendRecvKernel<4, FuncSum<int8_t>, int8_t>，
+ * 我们先看下一个block中线程的组织，假设args->p2p.nThreads为320，
+ * 其中160个线程用于send，160线程用于recv，进一步的160线程中128线程用于数据实际收发，
+ * 剩下的32线程（一个warp）用于同步。
+*/
 #if NCCL_OP == 0
 /* Kernels with the first operation inlined */
 #define IMPL_COLL_KERN(coll, op, ncclFunc, dtype, ctype, fIndex) \

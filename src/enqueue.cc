@@ -53,6 +53,8 @@
   NCCL_FUNCS3B(coll, copy), \
   NCCL_FUNCS3B(coll, copy)
 
+//kernel执行
+//ncclKerns定义如下，我们用的是第一个，即ncclSendRecvKernel_copy_i8
 // Must be consistent with the ncclFuncSet enum
 static void* const ncclKerns[1+NCCL_NUM_FUNCTIONS*ncclNumOps*ncclNumTypes*NCCL_NUM_ALGORITHMS*NCCL_NUM_PROTOCOLS] = {
   (void*)NCCL_KERN_NAME(ncclSendRecv, copy, i8),
@@ -87,6 +89,15 @@ ncclResult_t ncclLaunchCooperativeKernelMultiDevice(struct cudaLaunchParams *par
   return ncclSuccess;
 }
 
+/*
+ * 之前在channel搜索的时候提过一个channel对应一个block，
+ * 在setupLaunch这里就能看到会遍历p2p channel，有几个channel就将gridDim.x设置为几。
+ * 但是由于有的channel上没有p2p操作，因此，需要为这些空channel fake一个ncclColl，
+ * 设置delta为-1表示这是没有p2p操作的channel，并设置funcIndex，comm等其他信息。
+ * 然后设置最后一个ncclColl的active为2表示这是最后一个ncclColl。
+ * 然后将第一个channel的第一个ncclColl拷贝到comm->args然后设置myParam中的func，
+ * 到这里kernel所需的参数就设置好了。
+ */
 ncclResult_t setupLaunch(struct ncclComm* comm, struct cudaLaunchParams* params) {
   // Only launch blocks where we have work to do.
   for (int c=0; c<comm->p2pnChannels; c++) {
@@ -165,6 +176,7 @@ ncclResult_t ncclCpuBarrierOut(struct ncclComm* comm) {
 }
 
 ncclResult_t ncclBarrierEnqueue(struct ncclComm* comm) {
+    //首先会通过setupLaunch设置myParams
   struct cudaLaunchParams* params = comm->myParams;
   if (params->gridDim.x == 0) return ncclSuccess;
 
@@ -187,9 +199,13 @@ ncclResult_t ncclBarrierEnqueue(struct ncclComm* comm) {
 
   if (comm->launchMode == ncclComm::GROUP) {
     int isLast = 0;
+    //这里会对intraBarrier进行cas操作，
+    // 直到第intraRanks次执行ncclBarrierEnqueue才会将isLast设置为1，
+    // 换句话说只有执行最后一个AsyncArgs时才会起kernel。
     NCCLCHECK(ncclCpuBarrierIn(comm, &isLast));
     if (isLast) {
       // I'm the last. Launch all operations.
+      //通过cudaLaunchCooperativeKernelMultiDevice一次性在多个设备上启动kernel。
       NCCLCHECK(ncclLaunchCooperativeKernelMultiDevice(comm->intraParams, comm->intraCudaDevs, comm->intraRanks, *comm->intraCGMode));
       NCCLCHECK(ncclCpuBarrierLast(comm));
     }
@@ -415,6 +431,7 @@ static ncclResult_t computeColl(struct ncclInfo* info /* input */, struct ncclCo
   return ncclSuccess;
 }
 
+//将comm->userStream设置为info->stream。
 static ncclResult_t checkSetStream(struct ncclInfo* info) {
  if (info->comm->userStreamSet == false) {
     info->comm->userStream = info->stream;
@@ -436,6 +453,12 @@ ncclResult_t ncclSaveKernel(struct ncclInfo* info) {
   struct ncclColl coll;
   struct ncclProxyArgs proxyArgs;
   memset(&proxyArgs, 0, sizeof(struct ncclProxyArgs));
+  /*computeColl中会通过ncclInfo初始化ncclColl coll，比如sendbuf，recvbuf，comm等，
+   * 然后设置myParams的blockDim，根据info中的channelId找到channel，尝试将当前的coll加入到channel的collectives，
+   * collFifoTail为collectives队尾，对应的ncclColl为c，首先需等待c的active直到不被占用，然后将coll拷贝到c，
+   * 设置active为1，将channel的collcount加一，collFifoTail指向下一个ncclColl，
+   * c的nextIndex设置为collFifoTail。注意在当前场景下函数ncclProxySaveP2p没有作用，因此略去。
+   */
   NCCLCHECK(computeColl(info, &coll, &proxyArgs));
 
   info->comm->myParams->blockDim.x = std::max<unsigned>(info->comm->myParams->blockDim.x, info->nThreads);
@@ -485,6 +508,15 @@ ncclResult_t ncclSaveKernel(struct ncclInfo* info) {
   return ncclSuccess;
 }
 
+/*
+ * 将p2p相关的信息保存到comm的p2plist，peer是要发送给谁，
+ * 这里delta是指(rank + delta) % nranks = peer， 这样通过rank + delta就可以找到对应channel。
+ * p2pnChannelsPerPeer个channel会并行执行数据的发送，
+ * 如果channel还没有建立和peer的连接的话需要先记录一下连接信息，
+ * 比如第id个channel的send，会在send[id * nranks + nsend[id] ]的位置记录下peer，
+ * 然后nsend[id]加一，以便于后续执行建链的逻辑。
+ * 最后将sendbuff和数据长度记录到对应peerlist中的对应peer，即对应图一
+*/
 // Save p2p operations in comm->p2plist. Operations will be posted to channels
 // during ncclGroupEnd()
 ncclResult_t ncclSaveP2p(struct ncclInfo* info) {
