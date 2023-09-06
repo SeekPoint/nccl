@@ -40,7 +40,7 @@ struct ncclConnect {
   char data[CONNECT_SIZE];
 };
 
-//定义了一系列的通信相关的函数指针，用户可以自己实现这些接口，
+//ncclConnector的 ncclTransportComm定义了一系列的通信相关的函数指针，用户可以自己实现这些接口，
 //ncclTransport 定义了send和recv两个ncclTransportComm，
 //本节会介绍下P2P和NET两个ncclTransport。
 struct ncclTransportComm {

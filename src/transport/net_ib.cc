@@ -319,6 +319,10 @@ struct ncclIbSendComm {
   struct ibv_mr* fifoMr;
 };
 
+//gpuFlush也对应一个qp，不过这个qp是local的，即他的对端qp就是自己，当开启gdr之后，每次接收数据后都需要执行一下flush，
+//其实是一个rdma read操作，使用网卡读一下接收到的数据的第一个int到hostMem。
+// 官方issue里解释说当通过gdr接收数据完成，产生wc到cpu的时候，接收的数据并不一定在gpu端可以读到，
+//这个时候需要在cpu端执行以下读取。
 struct ncclIbGpuFlush {
   int enabled;
   int hostMem;
@@ -327,10 +331,6 @@ struct ncclIbGpuFlush {
   struct ibv_qp* qp;
 };
 
-//gpuFlush也对应一个qp，不过这个qp是local的，即他的对端qp就是自己，当开启gdr之后，每次接收数据后都需要执行一下flush，
-//其实是一个rdma read操作，使用网卡读一下接收到的数据的第一个int到hostMem。
-// 官方issue里解释说当通过gdr接收数据完成，产生wc到cpu的时候，接收的数据并不一定在gpu端可以读到，
-//这个时候需要在cpu端执行以下读取。
 struct ncclIbRemFifo {
   struct ncclIbSendFifo elems[MAX_REQUESTS];
   uint64_t addr;
@@ -351,6 +351,7 @@ struct ncclIbRecvComm {
   struct ncclIbGpuFlush gpuFlush;
 };
 
+//ncclIbInitVerbs创建pd和cq，ncclIbVerbs保存了pd和cq
 ncclResult_t ncclIbInitVerbs(ibv_context* ctx, struct ncclIbVerbs* verbs) {
   NCCLCHECK(wrap_ibv_alloc_pd(&verbs->pd, ctx));
   NCCLCHECK(wrap_ibv_create_cq(&verbs->cq, ctx, MAX_REQUESTS, NULL, NULL, 0));
@@ -392,10 +393,11 @@ ncclResult_t ncclIbCreateQp(uint8_t ib_port, struct ncclIbVerbs* verbs, int acce
   NCCLCHECK(wrap_ibv_modify_qp(*qp, &qpAttr, IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_ACCESS_FLAGS));
   return ncclSuccess;
 }
-//将qp从INIT状态转到RTR状态，设置mtu，对端的qpn，gid和port等信息，这个时候qp可以下发recv消息并正常接收了
+
 ncclResult_t ncclIbRtrQp(ibv_qp* qp, struct ncclIbQpInfo* info) {
   struct ibv_qp_attr qpAttr;
   memset(&qpAttr, 0, sizeof(struct ibv_qp_attr));
+    //将qp从INIT状态转到RTR状态，设置mtu，对端的qpn，gid和port等信息，这个时候qp可以下发recv消息并正常接收了
   qpAttr.qp_state = IBV_QPS_RTR;
   qpAttr.path_mtu = info->mtu;
   qpAttr.dest_qp_num = info->qpn;
@@ -420,10 +422,11 @@ ncclResult_t ncclIbRtrQp(ibv_qp* qp, struct ncclIbQpInfo* info) {
   NCCLCHECK(wrap_ibv_modify_qp(qp, &qpAttr, IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU | IBV_QP_DEST_QPN | IBV_QP_RQ_PSN | IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER));
   return ncclSuccess;
 }
-//然后执行，此时qp从状态RTR转为状态RTS，此时qp可以下发send消息正常发送了
+
 ncclResult_t ncclIbRtsQp(ibv_qp* qp) {
   struct ibv_qp_attr qpAttr;
   memset(&qpAttr, 0, sizeof(struct ibv_qp_attr));
+  ////然后执行，此时qp从状态RTR转为状态RTS，此时qp可以下发send消息正常发送了
   qpAttr.qp_state = IBV_QPS_RTS;
   qpAttr.timeout = ncclParamIbTimeout();
   qpAttr.retry_cnt = ncclParamIbRetryCnt();
@@ -436,7 +439,6 @@ ncclResult_t ncclIbRtsQp(ibv_qp* qp) {
 //由于基于socket的建链方式需要通过socket交换发送端和接收端的信息，
 //比如qp number，port，mtu，gid或者lid等，所以这里通过ncclIbListen创建了监听socket，
 // 过程类似bootstrap，fd写到listenComm，ip port写到handle，即connectInfo。
-
 ncclResult_t ncclIbListen(int dev, void* opaqueHandle, void** listenComm) {
   struct ncclIbListenComm* comm;
   NCCLCHECK(ncclCalloc(&comm, 1));
@@ -455,7 +457,7 @@ ncclResult_t ncclIbListen(int dev, void* opaqueHandle, void** listenComm) {
 ncclResult_t ncclIbConnect(int dev, void* opaqueHandle, void** sendComm) {
   struct ncclIbSendComm* comm;
 //ncclIbMalloc分配的是页对齐的内存，包括后边可以看到nccl在注册内存的时候都进行了页对齐，
-//但ibv_reg_mr并不要求内存为页对齐的
+//但ibv_reg_mr并不要求内存为页对齐的, The registered memory buffer doesn't have to be page-aligned.
   NCCLCHECK(ncclIbMalloc((void**)&comm, sizeof(struct ncclIbSendComm)));
 
   struct ncclIbHandle* handle = (struct ncclIbHandle*) opaqueHandle;
@@ -508,9 +510,10 @@ ncclResult_t ncclIbAccept(void* listenComm, void** recvComm) {
   socklen_t socklen = sizeof(struct sockaddr_in);
   SYSCHECKVAL(accept(lComm->fd, (struct sockaddr*)&sockaddr, &socklen), "accept", rComm->fd);
   struct ncclIbQpInfo remQpInfo;
+  //通过socket收到了rank 1的qp信息
   NCCLCHECK(socketReceive(rComm->fd, &remQpInfo, sizeof(remQpInfo)));
 
-  // IB setup
+  // IB setup  然后通过net dev获取对应网卡的context和port，
   ibv_context* ctx = ncclIbDevs[lComm->dev].context;
   uint8_t ib_port = ncclIbDevs[lComm->dev].port;
   struct ibv_port_attr portAttr;
@@ -518,11 +521,11 @@ ncclResult_t ncclIbAccept(void* listenComm, void** recvComm) {
   union ibv_gid gid;
   NCCLCHECK(wrap_ibv_query_gid(ctx, ib_port, ncclParamIbGidIndex(), &gid));
 
-  // QP Creation
+  // QP Creation  通过ncclIbInitVerbs创建pd和cq
   NCCLCHECK(ncclIbInitVerbs(ctx, &rComm->verbs));
   NCCLCHECK(ncclIbCreateQp(ib_port, &rComm->verbs, IBV_ACCESS_REMOTE_WRITE, &rComm->qp));
 
-  // Adjust the MTU
+  // Adjust the MTU  根据rank 1调整mtu
   remQpInfo.mtu = (enum ibv_mtu)std::min(remQpInfo.mtu, portAttr.active_mtu);
 
   // Setup QP
@@ -598,7 +601,13 @@ ncclResult_t ncclIbGetRequest(struct ncclIbRequest* reqs, struct ncclIbRequest**
   *req = NULL;
   return ncclInternalError;
 }
-
+/*
+ * 最后将rank 10的port，qpn，gid等通过socket发送回rank 1，到这里ncclTransportP2pSetup就执行完成了，
+ * 但是此时rdma还没有完成建立连接，因为rank 1还没有拿到rank 10的信息，qp还处于INIT状态。
+ *
+ * rank 1直到开始发送数据的时候才会去检查是否完成最后一步建链，如果还没有建链那么执行ncclSendCheck，过程和上述一致，不再赘述。
+到这里rank 1和rank 10的rdma链接就建立完成了，然后我们再看下rank 10和rank 9的p2p链接。
+ */
 ncclResult_t ncclSendCheck(struct ncclIbSendComm* comm) {
   struct ncclIbQpInfo remQpInfo;
   struct ibv_qp* qp = comm->qp;

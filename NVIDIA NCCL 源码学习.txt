@@ -17,6 +17,15 @@ https://blog.csdn.net/KIDGIN7439/article/details/128326053
 
 NVIDIA NCCL 源码学习（八）- 数据通信链路transport的建立
 https://blog.csdn.net/kidgin7439/article/details/126953432
+上节以ringGraph为例介绍了机器间channel的连接过程，现在环里每个rank都知道了从哪个rank接收数据以及将数据发送给哪个rank，本节具体介绍下P2P和rdma NET场景下数据通信链路的建立过程。
+上节说到nccl通过ncclTransportP2pSetup完成了数据通信链路的建立，还是以上节两机十六卡的环为例：
+第一台机器的环：
+graph->intra: GPU/0 GPU/7 GPU/6 GPU/3 GPU/2 GPU/5 GPU/4 GPU/1
+graph->inter: NET/0 NET/0
+第二台机器的环：
+graph->intra: GPU/10 GPU/9 GPU/8 GPU/13 GPU/12 GPU/15 GPU/14 GPU/11
+graph->inter: NET/0 NET/0
+===============
 最后简单总结下，建链的过程都是以下过程：
 接收端 执行recv setup，创建buffer等，将相关信息记录到connectIndo，启动一个监听socket，ip port同样记录到connectInfo，通过bootstrap发送connectInfo到 发送端。
 发送端 执行send setup，创建buffer等，将相关信息记录到connectInfo，然后发送给 接收端。这一步rdma场景没有用到connectInfo。

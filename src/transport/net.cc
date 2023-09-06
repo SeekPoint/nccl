@@ -39,7 +39,7 @@ struct netRecvResources {
   int useGdr;  // 是否支持gdr
   char* buffers[NCCL_NUM_PROTOCOLS]; // buffer地址，三个协议连续存储
   int buffSizes[NCCL_NUM_PROTOCOLS];  // buffer长度，三个协议的长度和
-  void* mhandles[LOC_COUNT];
+  void* mhandles[LOC_COUNT]; // rdma注册的mr
   void** mhandlesProto[NCCL_NUM_PROTOCOLS];  // 指向mhandles
   uint64_t step;
   uint64_t llLastCleaning;
@@ -103,12 +103,10 @@ ncclResult_t netSendSetup(struct ncclTopoSystem* topo, struct ncclTopoGraph* gra
 }
 
 /* Setup recv connector
- *
  * 首先分配 netRecvResources 赋给ncclConnector，主要字段含义见注释，其中LOC_CONUT为2，表示有两个buffer，
  * 如果支持gdr，那么会使用第LOC_DEVMEM（1）个buffer，即显存，如果不支持gdr，那么会使用第LOC_HOSTMEM（0）个buffer，
  * 即锁页内存；sendMem，recvMem记录了fifo的head和tail，用来协调生产者消费者，这个下节具体介绍，本节可忽略；
  * 用户执行的通信操作比如ncclSend一块数据，nccl会将这块数据分成多个小块流水线发送，step表示第几个小块，这个也在下节具体介绍。
-
  */
 ncclResult_t netRecvSetup(struct ncclTopoSystem* topo, struct ncclTopoGraph* graph, struct ncclPeerInfo* myInfo, struct ncclPeerInfo* peerInfo, struct ncclConnect* connectInfo, struct ncclConnector* recv, int channelId) {
   struct netRecvResources* resources;
@@ -116,9 +114,13 @@ ncclResult_t netRecvSetup(struct ncclTopoSystem* topo, struct ncclTopoGraph* gra
   recv->transportResources = resources;
 
   NCCLCHECK(ncclTopoGetNetDev(topo, myInfo->rank, graph, channelId, &resources->netDev));
-  /*ncclTopoCheckGdr检查选择的网卡和当前rank的gpu是否支持gdr，具体逻辑在第五节中介绍过，这里不再赘述。
-   * 然后为sendMem和recvMem分配锁页内存，设置head和tail；测试机器支持gdr，所以protoLoc均为LOC_DEVMEM，即显存，然后分配三个协议所需的buffer，
-   * 三个协议的buffer连续存储，通过offset记录各自的起始地址，offset保存到conn。mhandles即rdma用的mr，mhandlesProtoc指向mhandles。
+  /*ncclTopoCheckGdr检查选择的网卡和当前rank的gpu是否支持gdr，
+   * 具体逻辑在第五节中介绍过，这里不再赘述。
+   * 然后为sendMem和recvMem分配锁页内存，设置head和tail；
+   * 测试机器支持gdr，所以protoLoc均为LOC_DEVMEM，即显存，然后分配三个协议所需的buffer，
+   * 三个协议的buffer连续存储，通过offset记录各自的起始地址，
+   * offset保存到conn。mhandles即rdma用的mr，
+   * mhandlesProtoc指向mhandles。
 */
   NCCLCHECK(ncclTopoCheckGdr(topo, myInfo->busId, resources->netDev, 0, &resources->useGdr));
 
@@ -164,14 +166,18 @@ ncclResult_t netRecvSetup(struct ncclTopoSystem* topo, struct ncclTopoGraph* gra
   return ncclSuccess;
 }
 
+//然后rank 1通过bootstrapRecv收到了rank 10发送来的ip和port，然后执行connect，即netSendConnect
 ncclResult_t netSendConnect(struct ncclConnect* connectInfo, int nranks, int rank, struct ncclConnector* send) {
   // Setup device pointers
   struct netSendResources* resources = (struct netSendResources*)send->transportResources;
+  //这里的info就是rank 10的ip，port，然后执行ncclNetConnect，即ncclIbConnect，
+  // 这里主要就是创建qp并将相关信息通过socket发送到接收端。
   struct netConnectInfo* info = (struct netConnectInfo*)connectInfo;
 
   // Connect to remote peer
   NCCLCHECK(ncclNetConnect(resources->netDev, info->netHandle, &resources->netSendComm));
 
+  //需要将setup过程中分配的数据buffer进行注册，即ncclIbRegMr，这里进行了页对齐，mr写到了resource的mhandle里。
   if (resources->buffSizes[LOC_DEVMEM]) {
     NCCLCHECK(ncclNetRegMr(resources->netSendComm, resources->buffers[LOC_DEVMEM], resources->buffSizes[LOC_DEVMEM], NCCL_PTR_CUDA, &resources->mhandles[LOC_DEVMEM]));
   }

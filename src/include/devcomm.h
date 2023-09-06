@@ -125,7 +125,9 @@ struct ncclTree {
   int up;
   int down[NCCL_MAX_TREE_ARITY];
 };
-
+/*ncclPeer保存了两个connector，对于rank 10，send负责和rank 9通信，recv负责和rank 1通信。
+ * 后续为了方便表述，假设rank 10叫接收端，rank 1叫发送端。
+ * */
 struct ncclPeer {
   struct ncclConnector send;
   struct ncclConnector recv;

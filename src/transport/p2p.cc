@@ -8,9 +8,10 @@
 #include "graph.h"
 #include "utils.h"
 
+p2p场景rank之间交换的connectInfo如下所示
 struct p2pConnectInfo {
-  int direct;
-  int read;
+  int direct; // 是否为同进程
+  int read;  // 是否支持p2p read
   union {
     void* directPtr;  // 同进程使用这个字段记录当前rank的数据buffer
     cudaIpcMemHandle_t devIpc;  // 不同进程的话使用共享显存通信，devIpc记录当前rank的ipc handle
@@ -112,6 +113,7 @@ static int p2pUseRead(struct ncclTopoSystem* topo, struct ncclPeerInfo* info1, s
   return read;
 }
 
+//接下来rank 10会执行send的setup，大体逻辑一致，从这里我们可以看出useRead的作用，如果useRead为1，那么buffer放在send rank，如果为0，则放在recv rank
 /* Send: Create and return connect structures for this peer to connect to me */
 ncclResult_t p2pSendSetup(struct ncclTopoSystem* topo, struct ncclTopoGraph* graph, struct ncclPeerInfo* myInfo, struct ncclPeerInfo* peerInfo,
     struct ncclConnect* connectInfo, struct ncclConnector* send, int channelId) {
@@ -119,6 +121,7 @@ ncclResult_t p2pSendSetup(struct ncclTopoSystem* topo, struct ncclTopoGraph* gra
   struct p2pSendResources* resources;
   NCCLCHECK(ncclCalloc(&resources, 1));
   send->transportResources = resources;
+  //从这里我们可以看出useRead的作用，如果useRead为1，那么buffer放在send rank，如果为0，则放在recv rank。
   int useRead = p2pUseRead(topo, myInfo, peerInfo);
   int sendSize = sizeof(struct ncclSendMem);
   // For P2P Read the SIMPLE buffer is tagged on the end of the ncclSendMem structure
@@ -169,6 +172,14 @@ ncclResult_t p2pSendSetup(struct ncclTopoSystem* topo, struct ncclTopoGraph* gra
   return ncclSuccess;
 }
 
+/*仍然按照刚刚的顺序，rank 9先执行recv的setup， 首先分配resource，数据通信buffer会保存在ncclRecvMem的buff字段。
+ *
+ *
+ * 然后判断useRead，如果两个rank之间的路径类型小于p2pLevel（默认是PATH_SYS），那么useP2P为1，
+ * 如果路径类型为PATH_NVL并且为安培架构，那么useRead为1，ncclRecvMem使用柔性数组存储buffer，
+ * 还是只关注NCCL_PROTO_SIMPLE，如果read为1那么不需要分配buffer，由于当前场景为单进程，
+ * 所以记录direct为1，devMem记录到direcPtr，然后通过cudaDeviceEnablePeerAccess开启卡间p2p访问。
+ */
 /* Create and return connect structures for this peer to connect to me */
 ncclResult_t p2pRecvSetup(struct ncclTopoSystem* topo, struct ncclTopoGraph* graph, struct ncclPeerInfo* myInfo, struct ncclPeerInfo* peerInfo,
     struct ncclConnect* connectInfo, struct ncclConnector * recv, int channelId) {
@@ -221,6 +232,8 @@ ncclResult_t p2pRecvSetup(struct ncclTopoSystem* topo, struct ncclTopoGraph* gra
   return ncclSuccess;
 }
 
+//然后rank 10执行send connect过程，Info为rank 9的信息，remDevMem就是刚刚rank 9分配的显存，如果read为0，则需要设置conn的direct，接下来设置conn的buff，
+// 如果read为1，buff为当前卡，否则设置为rank 9的显存，接下来设置的head，tail用来协调发送端和接收端，下节详细介绍。
 /* Connect/Send to this peer */
 static ncclResult_t p2pSendConnect(struct ncclConnect* connectInfo, int nranks, int rank, struct ncclConnector* send) {
   struct p2pSendResources* resources = (struct p2pSendResources*)send->transportResources;

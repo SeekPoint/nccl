@@ -22,7 +22,6 @@ struct ncclTransport ncclTransports[NTRANSPORTS] = {
  NET通过网络通信，nccl会依次通过这三个transport的canConnect判断是否可用，
  然后选择第一个可用的，由于rank 1不在当前机器，因此只有NET的recv可用，
  设置connector的transportComm为netTransport的recv。
-
  */
 template <int type>
 static ncclResult_t selectTransport(struct ncclTopoSystem* topo, struct ncclTopoGraph* graph, struct ncclPeerInfo* myInfo, struct ncclPeerInfo* peerInfo, struct ncclConnect* connect, struct ncclConnector* connector, int channelId) {
@@ -48,6 +47,14 @@ ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* 
   uint32_t nSkippedSend = 0, nSkippedRecv = 0; /* for tracing */
   struct ncclConnect connect;
   struct ncclConnector* conn;
+
+  /*通过bootstrapSend将connectInfo发送到了peer，
+   * 即rank 1，connectInfo就是上述的ip port。
+   * 当rank 1执行这个函数的时候，会遍历nsend，
+   * 此时rank 1的peer就是rank 10，然后执行selectTransport，
+   * 就会执行netTransport的send的setup，即netSendSetup，
+   * 这个逻辑和netRecvSetup基本一致，主要还是分配各种buffer，不再赘述。
+   */
   for (int i=0; i<nrecv; i++) {
     int peer = peerRecv[i];
     if (peer == -1 || peer >= comm->nRanks) continue;
@@ -77,6 +84,8 @@ ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* 
     conn->connected = 1;
     CUDACHECK(cudaMemcpy(&channel->devPeers[peer].send, conn, sizeof(struct ncclConnector), cudaMemcpyHostToDevice));
   }
+
+  //rank 1执行了connect，将qp相关信息通过socket发送给了rank 10，这时候rank 10接着执行下边的connect，即netRecvConnect。另外在rdma场景下这里通过bootstrap收到的ncclConnect没有用到。
   for (int i=0; i<nrecv; i++) {
     int peer = peerRecv[i];
     if (peer == -1 || peer >= comm->nRanks) continue;
