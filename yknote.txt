@@ -11,6 +11,13 @@ Fast Multi-GPU collectives with NCCL-翻译
 yk:
 NCCL_API 修饰的都是向外提供的API
 
+https://zhuanlan.zhihu.com/p/337549503
+分布式训练与NCCL
+
+
+https://zhuanlan.zhihu.com/p/465967735
+分布式训练硬核技术——通信原语  ==纯理论
+
 https://zhuanlan.zhihu.com/p/609121884
 【微软】MSCCL Github仓库介绍
 https://github.com/Mellanox/nccl-rdma-sharp-plugins
@@ -53,12 +60,10 @@ NCCL 动态扩展
 
 =======================================================================================================================================================
 
-https://www.zhihu.com/question/63219175/answer/206697974
-如何理解Nvidia英伟达的Multi-GPU多卡通信框架NCCL？
-
-https://www.zhihu.com/question/63219175
-如何理解Nvidia英伟达的Multi-GPU多卡通信框架NCCL？
-
+https://zhuanlan.zhihu.com/p/79030485  腾讯机智团队分享--AllReduce算法的前世今生
+2019年上半年NCCL2.4提出double binary tree算法
+其主要思想是利用二叉树中大约一半节点是叶子节点的特性，通过将叶子节点变换为非叶子节点，得到两颗二叉树，每个节点在其中一颗二叉树上是叶子节点，在另一颗二叉树上是非叶子节点。
+这种方法理论上是能够提供比ring算法更低的延迟（log2N < N），但实际效果需要测试。后续机智团队在资源条件合适的情况下会安排进行对比。
 
 
 https://lgd.gd/2021/03/21/NCCL%E6%BA%90%E7%A0%81%E9%98%85%E8%AF%BB%E7%AC%94%E8%AE%B0/

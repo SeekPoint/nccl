@@ -1,0 +1,26 @@
+
+
+https://www.zhihu.com/question/63219175
+如何理解Nvidia英伟达的Multi-GPU多卡通信框架NCCL？
+
+
+袁进辉
+开发深度学习编译器，框架及平台OneFlow
+郭丹青、ZOMI酱、散步、gaocegege、郑华滨等 236 人赞同了该回答
+NCCL 代码是开源的，想深入理解NCCL还是得看代码，虽然C代码读起来比较鬼畜，实现高性能集群操作的技巧特别精妙。
+最近的版本更新挺多，除了Ring allreduce，还增加了double tree拓扑的allreduce，在节点更多时表现更出色。
+NCCL 性能好，有多方面原因，
+1，拓扑算法，ring allreduce, double tree拓扑等；
+2，细节处理好，gpu p2p数据搬运，GPU-Direct支持等；
+3，节点间支持RDMA和socket，前者在特定网络设备上表现特别好；
+4，手工实现了一个类似cuda stream的任务队列，方便从host向device派遣任务；
+5，在cuda kernel上限定每个block使用比较少数thread，集群操作不太影响其他计算任务；
+6，把host memory映射到device地址空间，从device直接访问host，流式处理数据搬运和计算；
+7，device之间使用底层通信原语进行同步，而不是cuda api里的event。
+
+我们也看到了NCCL里一些设计不是那么巧妙的地方。
+
+我有想法在北京组织一些机器学习与系统相关的Meetup，邀请相关的讲师分享已公开的技术，开源代码，学术论文，以及经讲师公司批准的内容，希望得到社区的关注和支持
+
+
+还有很多！！！
