@@ -123,6 +123,13 @@ class ncclPrimitives {
     return abort;
   }
 
+  /*队列的运行
+然后分别从kernel视角和proxy视角看下这个队列如何运行的。
+图三
+对于kernel端，如图三，过程和单机一致，在搬运数据之前，
+   通过判断sendConnHeadPtr和sendConnTailPtr之间的距离来判断队列是否已满，
+   注意这里sendConnHead其实是sendConnTailPtr。
+   */
   inline __device__ void waitSend(int nbytes) {
     spins = 0;
     if (sendConnHeadPtr) {
@@ -158,6 +165,7 @@ class ncclPrimitives {
   inline __device__ void incSend(int i) {
     sendStep[i] += SLICESTEPS;
   }
+  //每当新搬运了一块数据，就将sendConnTailPtr加一。
   inline __device__ void postSend() {
     if (sendConnTailPtr) *sendConnTailPtr = sendConnTail += SLICESTEPS;
   }

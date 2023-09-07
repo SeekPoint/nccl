@@ -443,6 +443,11 @@ static ncclResult_t checkSetStream(struct ncclInfo* info) {
   return ncclSuccess;
 }
 
+/*
+ ncclProxyArgs
+首先看下scheduleSendRecv过程的ncclSaveKernel，
+ 这里流程和单机不一样的为ncclProxySaveP2p。
+ */
 ncclResult_t ncclSaveKernel(struct ncclInfo* info) {
   if (info->comm->nRanks == 1 && info->coll != ncclCollSendRecv) {
     if (info->sendbuff != info->recvbuff)

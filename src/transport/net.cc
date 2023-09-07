@@ -51,6 +51,13 @@ ncclResult_t netCanConnect(int* ret, struct ncclTopoSystem* topo, struct ncclTop
   return ncclSuccess;
 }
 
+
+/*队列的创建
+首先看下send端的proxy线程和kernel是如何协作的，类似单机内部send和recv之间的队列，proxy和kernel间也是通过这种生产者消费者队列来协调的，整体结构如下图所示
+005-002.png
+回顾下通信连接建立的过程中，send端会执行netSendSetup分配通信过程中需要的变量，如图二的ncclConnector。
+ */
+
 /* Determine if we will use this transport for this peer and return connect
  * information for this peer */
 ncclResult_t netSendSetup(struct ncclTopoSystem* topo, struct ncclTopoGraph* graph, struct ncclPeerInfo* myInfo, struct ncclPeerInfo* peerInfo, struct ncclConnect* connectInfo, struct ncclConnector* send, int channelId) {
@@ -64,6 +71,10 @@ ncclResult_t netSendSetup(struct ncclTopoSystem* topo, struct ncclTopoGraph* gra
   NCCLCHECK(ncclCudaHostCalloc(&resources->sendMem, 1));
   NCCLCHECK(ncclCudaHostCalloc(&resources->recvMem, 1));
 
+  //核心就是队列的head，tail和SizesFifo，通信过程中的buf，
+  // 这些都会保存到connector的conn中。对于kernel端，
+  // 当执行了loadSendConn和loadSendSync之后kernel就持有了ncclConnector的变量，如图二左侧框。
+  //对于proxy线程，ncclConnector被保存到了ncclProxyArgs中，所以proxy也可以拿到这些变量，如图二的右侧框。
   send->conn.direct |= resources->useGdr ? NCCL_DIRECT_NIC : 0;
   send->conn.tail = &resources->recvMem->tail;
   send->conn.fifo = resources->recvMem->sizesFifo;
@@ -235,8 +246,22 @@ ncclResult_t netRecvFree(void* transportResources) {
   return ncclSuccess;
 }
 
+/*同样的队列在proxy端的视角如图四
+
+图四
+recvTail由kernel更新，表示kernel端产生了这么多的数据，head由proxy更新，表示proxy完成了这些数据的发送；
+ 由于proxy使用异步发送，所以引入了tail变量，head和tail之间的数据为proxy之星了异步发送，
+ 但还没确定发送完成，tail和recvTail之间为proxy还没有执行发送的数据。
+ */
 ncclResult_t netSendProxy(struct ncclProxyArgs* args) {
   struct netSendResources* resources = (struct netSendResources*) (args->connector->transportResources);
+  /*
+   * 具体看下，proxy拿到一个新的ncclProxyArgs args（state为ncclProxyOpReady）之后，
+ 首先计算head，tail和end，
+ 其中head和tail表示队列的首尾，
+ end表示完成当前这个args的数据发送一共需要多少步，
+ 然后状态转变为ncclProxyOpProgress
+  */
   if (args->state == ncclProxyOpReady) {
     // Round to next multiple of sliceSteps
     resources->step = ROUNDUP(resources->step, args->chunkSteps);
@@ -245,6 +270,13 @@ ncclResult_t netSendProxy(struct ncclProxyArgs* args) {
     args->end = args->head + args->nsteps;
     args->state = ncclProxyOpProgress;
   }
+
+  /* 单机过程中的队列其实是逻辑的，并没有实际分配一个队列，
+
+   多机这里可以将sizesFifo理解为实际分配的队列，
+   fifo中每一项代表了这块数据的长度，
+   可以看到proxy在拿到fifo对应项之后直接通过ncclNetIsend执行数据的发送过程。
+   */
   if (args->state == ncclProxyOpProgress) {
     int p = args->protocol;
     int stepSize = args->connector->comm->buffSizes[p] / NCCL_STEPS;
@@ -322,6 +354,8 @@ ncclResult_t netSendProxy(struct ncclProxyArgs* args) {
           }
         }
       }
+      //如果head小于tail，说明有执行了异步发送的请求，通过ncclNetTest判断是否发送完成，如果发送完成了，那么更新head。
+      // 最后如果head等于end，说明这个args执行完成了，将state转为ncclProxyOpNone。
       if (args->head < args->tail) {
         int done;
         int buffSlot = args->head%NCCL_STEPS;
@@ -369,6 +403,7 @@ ncclResult_t netRecvProxy(struct ncclProxyArgs* args) {
           args->idle = 0;
         }
       }
+      //recv端proxy整体流程基本和send一致，不过在执行ncclIbTest之后需要执行一下ncclIbFlush。
       if (args->tail > args->head) {
         int buffSlot = args->head%NCCL_STEPS;
         int done, size;

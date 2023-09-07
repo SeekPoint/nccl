@@ -300,6 +300,25 @@ struct ncclIbListenComm {
   int fd;
 };
 
+/*网络通信过程
+然后以rdma为例看下send端和recv端是如何配合的。
+ 以rdma send/recv为例，当send端执行rdma send的时候，
+ 要求recv端已经post过一个wr到rq里，否则将会报错，为了解决这个问题，
+ 在send和recv的两个proxy之间，也引入了一个fifo，如图五所示
+
+图五
+
+
+ fifo中每个元素为ncclIbSendFifo，fifoHead由send端持有，remFifo.tail由recv端持有。
+ 对于rdma send/recv来说最重要的是ready字段，其他为rdma write场景用的。
+ fifo是由send端创建的，在rdma建链过程中的ncclIbConnect里会将fifo对应内存注册，
+ 然后通过socket将fifo地址和rkey发送给recv端，
+ recv端在每次往rq中下发一个wr之后会通过rdma write写send端fifo的tail对应的ncclIbSendFifo，
+ send端只有在fifoHead位置的ready为1才能执行send。
+
+这里多说一个疑问，在rdma write的场景中还需要ncclIbSendFifo的addr和rkey等字段，假设fifo中fifoHead位置叫slot，当使用rdma write的时候，发现slot->ready为1后，如何保证slot->addr等字段是可用的（网卡已经写完成），在咨询Tuvie大佬之后，因为slot的大小较小，会在同一个PCIe tlp中，又因为ready为最后的位置，所以可保证ready可用的时候，其他字段均可用。
+
+ */
 struct ncclIbSendFifo {
   uint64_t addr;
   int      size;
@@ -662,6 +681,12 @@ ncclResult_t ncclIbDeregMr(void* comm, void* mhandle) {
   return ncclSuccess;
 }
 
+/*
+ * 然后看下ncclIbSend的逻辑，首先通过fifoHead获取到fifo中对应的slot，判断ready，
+ * 如果为1则可以发送，然后通过ncclIbGetRequest获取一个req，req表示当前这个请求，之后会通过req判断这个通信是否完成。
+ * 然后设置wr，这里将wr_id设置为req的地址以方便之后判断请求是否完成，
+ * 然后post到sq中就返回，并将req存到fifo的对应位置。
+*/
 ncclResult_t ncclIbIsend(void* sendComm, void* data, int size, void* mhandle, void** request) {
   struct ncclIbSendComm* comm = (struct ncclIbSendComm*)sendComm;
   if (comm->ready == 0) NCCLCHECK(ncclSendCheck(comm));
@@ -836,6 +861,11 @@ ncclResult_t ncclIbFlush(void* recvComm, void* data, int size, void* mhandle) {
   return ncclSuccess;
 }
 
+/*然后看下ncclIbTest，判断指定的req是否发送完成，
+ * 根据req获取对应的cq，然后执行ibv_poll_cq获取到wc，
+ * 通过wc拿到wr_id，wr_id为对应的req，
+ * 然后设置这个req的done为1；然后循环直到指定的req->done为1。
+ * */
 ncclResult_t ncclIbTest(void* request, int* done, int* size) {
   struct ncclIbRequest *r = (struct ncclIbRequest*)request;
   *done = 0;

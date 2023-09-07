@@ -6,10 +6,23 @@ https://blog.csdn.net/KIDGIN7439/article/details/130936177
 然后执行ncclGroupEnd，如果发现channel没有建立到peer的链接则先建链，
 然后根据p2plist执行scheduleSendRecv(ncclSaveKernel)将信息保存到channel->collectives，
 然后再启动kernel，kernel会遍历channel->collectives执行send和recv。然后我们看下多机的流程是怎样的。
+==
+下边是之前第八节中关于flush的介绍
+gpuFlush也对应一个qp，不过这个qp是local的，即他的对端qp就是自己，
+当开启gdr之后，每次接收数据后都需要执行一下flush，
+其实是一个rdma read操作，
+使用网卡读一下接收到的数据的第一个int到hostMem。
+官方issue里解释说当通过gdr接收数据完成，产生wc到cpu的时候，
+接收的数据并不一定在gpu端可以读到，
+这个时候需要在cpu端执行一下读取。
+
+关于执行读取为什么能够保序后来咨询kkndyu大佬了解到，PCIe设备中有Transaction Ordering的概念，在同一个PCIe控制器中默认Read Request不会超过Posted Request，如下图col2
+005-006
 最后总结下多机通信的整体流程
-通信由kernel和proxy线程协调完成，send端kernel负责将数据从input搬运到buf，proxy线程负责将buf中数据通过网络发送给recv端
-kernel和proxy间通过队列实现生产者消费者模式
-send端通过rdma send发送数据，和recv端通过队列实现生产者消费者模式，队列位于send端，recv端每次下发一个wr到rq之后会执行rdma write通知send端
+    通信由kernel和proxy线程协调完成，send端kernel负责将数据从input搬运到buf，proxy线程负责将buf中数据通过网络发送给recv端
+    kernel和proxy间通过队列实现生产者消费者模式
+    send端通过rdma send发送数据，和recv端通过队列实现生产者消费者模式，队列位于send端，recv端每次下发一个wr到rq之后会执行rdma write通知send端
+
 
 
 

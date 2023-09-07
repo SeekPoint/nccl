@@ -59,7 +59,12 @@ static ncclResult_t allocateArgs(struct ncclComm* comm, struct ncclProxyArgs** a
   *argsptr = elem;
   return ncclSuccess;
 }
-
+/*005-001.png
+ * ncclProxyArgs被组织成图一分层的链式结构，comm中的proxyState->ops为第一层的第一个args，
+ * 图中纵向的一列表示在同一个connector上边的所有args，第一层（黄色框）为该connector的第一个args，
+ * 第二层（绿色框）为该connector的第二个args，层间通过next_peer指针索引；
+ * 一行就是所有connector的对应位置的args，层内通过next指针索引。
+ * */
 static void ProxyAppend(struct ncclConnector* connector, struct ncclProxyArgs* args) {
   struct ncclComm* comm = connector->comm;
   struct ncclProxyState* state = &comm->proxyState;
@@ -85,6 +90,13 @@ static void ProxyAppend(struct ncclConnector* connector, struct ncclProxyArgs* a
   pthread_mutex_unlock(&state->mutex);
 }
 
+/*
+ * 首先获取当前channel连接到peer的ncclPeer，
+ * 根据type是send还是recv获取这个peer的对应connector，
+ * 单机场景下connector的 transportComm为p2pTransport，proxy为空，
+ * 因此这里直接返回，而多机场景下为netTransport，proxy不为空，然后申请ncclProxyArgs，
+ * 设置progress为transportComm->proxy。
+*/
 template <int type>
 static ncclResult_t SaveProxy(int peer, struct ncclProxyArgs* args) {
   if (peer < 0) return ncclSuccess;
@@ -140,7 +152,7 @@ ncclResult_t ncclProxySaveColl(struct ncclProxyArgs* args, int pattern, int root
   }
   return ncclSuccess;
 }
-
+//多机间网络通信的过程是由独立的proxy线程执行的，ncclProxyArgs保存了通信需要的参数，proxy线程会根据这些args执行相应的通信流程。然后执行SaveProxy
 ncclResult_t ncclProxySaveP2p(struct ncclInfo* info, struct ncclChannel* channel) {
   struct ncclProxyArgs args;
   memset(&args, 0, sizeof(struct ncclProxyArgs));
@@ -165,6 +177,15 @@ ncclResult_t ncclProxySaveP2p(struct ncclInfo* info, struct ncclChannel* channel
   return ncclSuccess;
 }
 
+/*
+ * proxy线程
+然后看下刚提到的proxy线程，
+ 在initTransportsRank的时候通过ncclProxyCreate创建了proxy线程执行persistentThread，
+ 创建的时候由于还没有执行过ProxyAppend，
+ 所以comm中的proxyState->op为null，
+ 所以线程就阻塞在state->cond。
+
+ */
 void* persistentThread(void *comm_) {
   struct ncclComm* comm = (struct ncclComm*)comm_;
   struct ncclProxyState* state = &comm->proxyState;
@@ -189,6 +210,19 @@ void* persistentThread(void *comm_) {
         pthread_mutex_unlock(&state->mutex);
       }
     } while (op == NULL);
+    /*
+     * 当有ProxyArgs被添加进来并唤醒proxy线程之后，proxy线程就开始执行图一的第一层args，
+     * 拿到第一个args op，然后执行op的progress函数，
+     * 对于send场景，progress就是netTransport的netSendProxy，
+     * receive就是netRecvProxy。
+     * 执行op的progress之后遍历到下一个args next，
+     * 如果next的状态不是ncclProxyOpNone，
+     * 表示next还没有执行结束，那么将op设置为next，
+     * 下一次将会执行next；如果状态为ncclProxyOpNone，
+     * 表示next已经执行完成，
+     * 那么需要将next从args链中去除，这个时候尝试将next的next_peer替换next，
+     * 如果next没有next_peer，那么直接将next从第一层链中删除，
+     * 否则将next_peer提到第一层链来替换next。*/
     op->idle = 0;
     // opCount >= lastOpCount are part of an ongoing GroupStart/GroupEnd that hasn't started
     // yet and might be cancelled before they even start. Hold on on those.
@@ -241,6 +275,7 @@ void* persistentThread(void *comm_) {
   }
 }
 
+//然后在ncclBarrierEnqueueWait中会执行ncclProxyStart，这里会通过pthread_cond_signal唤醒阻塞在proxyState.cond里边的proxy线程。
 ncclResult_t ncclProxyStart(struct ncclComm* comm) {
   pthread_mutex_lock(&comm->proxyState.mutex);
   if (comm->proxyState.ops != NULL)

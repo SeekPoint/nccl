@@ -310,6 +310,7 @@ ncclResult_t ncclGroupEnd() {
    * prevent the NCCL call from completing, blocking the cudaFree call.
    */
   //这里会对每个AsyncArgs执行ncclBarrierEnqueue
+  //然后看下是如何唤醒proxy线程的，在执行scheduleSendRecv之后，通过ncclBarrierEnqueue启动了kernel。
   for (int i=0; i<ncclGroupIndex; i++) {
     struct ncclAsyncArgs* args = ncclGroupArgs+i;
     if (args->funcType == ASYNC_FUNC_COLL) {
