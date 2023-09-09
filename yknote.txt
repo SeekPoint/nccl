@@ -14,6 +14,11 @@ NCCL_API 修饰的都是向外提供的API
 https://zhuanlan.zhihu.com/p/337549503
 分布式训练与NCCL
 
+https://zhuanlan.zhihu.com/p/584500146
+GPU分布式训练：NCCL性能解析（一）节点内性能分析
+
+https://zhuanlan.zhihu.com/p/597081795
+GPU分布式训练: NCCL性能解析（二）多机通信——Ring, Tree, CollNet
 
 https://zhuanlan.zhihu.com/p/465967735
 分布式训练硬核技术——通信原语  ==纯理论
