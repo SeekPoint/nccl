@@ -896,7 +896,7 @@ affinity_restore:
   TRACE(NCCL_INIT, "rank %d nranks %d - DONE", rank, nranks);
   return ncclSuccess;
 }
-}
+
 /*
  * rank0节点执行ncclGetUniqueId生成ncclUniqueId，通过mpi将Id广播到所有节点，
  * 然后所有节点都会执行ncclCommInitRank，这里其他节点也会进行初始化bootstrap网络和通信网络的操作，
@@ -933,7 +933,7 @@ static ncclResult_t ncclCommInitRankDev(ncclComm_t* newcomm, int nranks, ncclUni
   }
 
   //// 每个rank都要执行
-  NCCLCHECKGOTO(ncclInit(), res, fail);
+  NCCLCHECKGOTO(ncclInit(), res, end);
   if (myrank == 0) showVersion();
 
   // Make sure the CUDA runtime is initialized.
