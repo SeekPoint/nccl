@@ -1,0 +1,103 @@
+https://ngdcn.com/post/278.html
+
+【微软】MSCCL Github仓库介绍
+网络技术风云汇
+网络技术风云汇
+网址www.ngdcn.com，vx公众号“网络技术风云汇”
+​关注他
+MSCCL
+Microsoft Collective Communication Library (MSCCL) 是一个为 Microsoft Azure 支持的多个加速器执行自定义集合通信算法的平台。
+
+介绍
+MSCCL 是一个建立在NCCL之上的加速器间通信框架，并使用其构建块来执行自定义编写的集合通信算法。MSCCL 的愿景是提供一个统一、高效和可扩展的框架，用于跨多个加速器执行集合通信算法。为实现这一目标，MSCCL 具有多种功能：
+
+可编程性：加速器之间的互连具有不同的延迟和带宽。因此，通用的集合通信算法不一定适用于所有拓扑和缓冲区大小。MSCCL 允许用户为给定的拓扑结构和缓冲区大小编写超优化的集合通信算法。这可以通过两个主要组件实现：MSCCL toolkit和MSCCL runtime（此 repo）。MSCCL toolkit包含一个高级 DSL (MSCCLang) 和一个为 MSCCL 运行时（此 repo）生成 IR 以在后端运行的编译器。MSCCL 将始终在没有自定义算法的情况下，MSCCL 将自动回退到 NCCL 的通用算法。例子提供了有关 MSCCL toolkit与运行时如何工作的一些实例。有关更多信息，请参阅MSCCL toolkit.
+Profiling/分析：MSCCL 有一个分析工具NPKit，它为每个原始发送和接收操作提供详细的时间线，以了解给定集合通信算法中的瓶颈。
+MSCCL 是微软研究院许多优秀研究人员和实习生的成果。以下是我们的出版物列表：
+
+GC3：用于 GPU 集合通信的优化编译器-- ASPLOS'23
+综合最优集合算法——PPoPP'21（最佳论文奖）
+打破分布式机器学习工作负载中的计算和通信抽象障碍——ASPLOS'22
+TACCL：使用通信草图指导集合算法综合-- NSDI'23
+如果您在研究中使用 MSCCL，请考虑引用我们的工作。此外，如果您有任何疑问或需要针对特定拓扑优化的集合通信算法，请联系我们。
+
+例子
+为了使用 MSCCL 自定义算法，您可以按照以下步骤在具有 8xA100 GPU 的 Azure NDv4 上为 AllReduce 使用两种不同的 MSCCL 算法：
+
+安装 MSCCL 的步骤：
+
+$ git clone https://github.com/microsoft/msccl.git
+$ cd msccl/
+$ make -j src.build
+$ cd ../
+然后，按照以下步骤安装nccl-tests进行性能评估：
+
+$ git clone https://github.com/nvidia/nccl-tests.git
+$ cd nccl-tests/
+$ make MPI=1 NCCL_HOME=../msccl/build/ -j
+$ cd ../
+接下来安装MSCCL toolkit来编译一些自定义算法：
+
+$ git clone https://github.com/microsoft/msccl-tools.git
+$ cd msccl-tools/
+$ pip install .
+$ cd ../
+$ python msccl-tools/examples/mscclang/allreduce_a100_allpairs.py --protocol=LL 8 2 > test.xml
+$ cd ../
+编译器生成的代码是一个 XML 文件 ( test.xml)，它被提供给 MSCCL 运行时。要评估其性能，请在 Azure NDv4 节点或任何 8xA100 系统上执行以下命令行：
+
+$ mpirun -np 8 -x LD_LIBRARY_PATH=msccl/build/lib/:$LD_LIBRARY_PATH -x NCCL_DEBUG=INFO -x NCCL_DEBUG_SUBSYS=INIT,ENV -x MSCCL_XML_FILES=test.xml -x NCCL_ALGO=MSCCL,RING,TREE  nccl-tests/build/all_reduce_perf -b 128 -e 32MB -f 2 -g 1 -c 1 -n 100 -w 100 -G 100 -z 0
+如果一切安装正确，您应该在日志中看到以下输出：
+
+[0] NCCL INFO Connected 1 MSCCL algorithms
+test.xml``MSCCL_XML_FILES在命令行中传递给运行时。test.xml您可以通过比较in-place（新算法）与out-of-place（默认环算法）来评估性能，在 8xA100 NVLink 互连 GPU 上它应该快 2-3 倍。MSCCL toolkit具有一组丰富的算法，适用于不同的 Azure SKU 和集合操作，与普通 NCCL 相比具有显着的加速。
+
+Build
+要构建库：
+
+$ cd msccl
+$ make -j src.build
+如果 CUDA 未安装在默认的 /usr/local/cuda 路径中，您可以使用以下命令定义 CUDA 路径：
+
+$ make src.build CUDA_HOME=<path to cuda install>
+build/除非BUILDDIR设置，否则MSCCL 将被编译和安装。
+
+默认情况下，为所有支持的体系结构编译 MSCCL。为了加速编译并减少二进制文件的大小，可以考虑重新定义NVCC_GENCODE（defined in makefiles/common.mk）以仅包含目标平台的架构：
+
+$ make -j src.build NVCC_GENCODE="-gencode=arch=compute_80,code=sm_80"
+安装
+要在系统上安装 MSCCL，请创建一个包，然后以 root 身份安装它。
+
+Debian/Ubuntu：
+
+$ # Install tools to create debian packages
+$ sudo apt install build-essential devscripts debhelper fakeroot
+$ # Build NCCL deb package
+$ make pkg.debian.build
+$ ls build/pkg/deb/
+RedHat/CentOS：
+
+$ # Install tools to create rpm packages
+$ sudo yum install rpm-build rpmdevtools
+$ # Build NCCL rpm package
+$ make pkg.redhat.build
+$ ls build/pkg/rpm/
+与操作系统无关的压缩包：
+
+$ make pkg.txz.build
+$ ls build/pkg/txz/
+PyTorch 集成
+要与 PyTorch 集成，请遵循此存储库中的 dockerfile。它有一个如何用 MSCCL 替换默认 NCCL 的示例。
+
+NPKit 集成
+MSCCL 集成了NPKit，这是一个分析器框架，可以在 MSCCL 组件中收集细粒度的跟踪事件，从而识别传输瓶颈。
+
+要启用 NPKit，只需添加NPKIT=1您的 make 命令。在执行期间，环境变量NPKIT_DUMP_DIR将用于生成所有输出（每个等级一个输出文件）。默认情况下，/tmp/将被使用。
+
+要分析 NPKit 输出，请运行 python 脚本tools/npkit_trace_generator.py以获取最终.json文件，该文件可以通过 Microsoft Edgeedge://tracing或 Google Chrome等跟踪查看器查看chrome://tracing。
+
+参考资料：https://github.com/microsoft/msccl
+
+更多精彩内容，请关注微信公众号"网络技术风云汇"或访问http://www.ngdcn.com。您的点赞和关注是最大的支持！
+
+编辑于 2023-02-24 22:16・IP 属地江苏

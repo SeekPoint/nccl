@@ -1,0 +1,110 @@
+Set Up and Test MSCCL
+https://www.adamweingram.com/tutorial/setup-msccl/
+
+
+Sep. 6, 2022Set Up and Test MSCCL
+Build Parts
+The first part of this article will be focused on building all parts necessary for MSCCL.
+
+Set Environment Variables
+If you’re running on a cluster with Slurm, you can load the CUDA module:
+
+module load cuda
+Then, NVCC can be located with the following. Some software may need this as an environment variable:
+
+export NVCC_LOCATION=$(which nvcc)
+The CUDA home directory can be set the same way:
+
+export CUDA_HOME=$(echo "${NVCC_LOCATION}" | sed 's/\/bin\/nvcc//g')
+MPI is also used during the testing process, so we’ll set an environment variable for that too (note that different systems may use different paths!):
+
+export MPI_HOME=/opt/apps/mpi/mpich-3.4.2_nvidiahpc-21.9-0
+Build NCCL
+MSCCL uses NCCL under the hood for some things, so we’ll need to build NCCL. The first step is to clone the NCCL repository from GitHub:
+
+git clone https://github.com/nvidia/nccl.git
+pushd nccl
+To reduce the time it takes to build/compile, we can specify the architecture using another environment variable. A100 GPUs require CUDA version 11.0+, so I’ll use ‘80’ here. (Note: You can take a look at the makefiles/common.mk file to see a full list):
+
+export NVCC_GENCODE="-gencode=arch=compute_80,code=sm_80"
+To run the build, we can use make. (Note: You may run out of memory! Either allocate more on your node, or add an argument after the -j):
+
+make -j src.build
+Now we can set NCCL-related environment variables that other steps require:
+
+export NCCL_HOME=$(echo "$(pwd)/build")
+We also need to modify LD_LIBRARY_PATH and PATH:
+
+export LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${NCCL_HOME}/lib"
+export PATH="${PATH}:${NCCL_HOME}/include"
+Now we can go back to the main project directory:
+
+popd
+Build MSCCL
+The first step is to clone the MSCCL repository from GitHub:
+
+git clone https://github.com/microsoft/msccl.git
+pushd msccl
+Then, MSCCL can be built using make:
+
+make -j src.build
+We can now go back to the main project directory:
+
+popd
+Build NCCL Tests
+Like the other parts, the first step is to download the NCCL Tests repository from GitHub:
+
+git clone https://github.com/nvidia/nccl-tests.git
+pushd nccl-tests
+Now we can build the tests (with MPI support!):
+
+make MPI=1 -j
+We can go back to the main project directory now:
+
+popd
+Run MSCCL Tests
+If running on a cluster, we’ll need two modules (CUDA and MPI):
+
+module load cuda
+module load mpi
+Then, we’ll make sure we have CUDA in our shared libraries (Ignore this step if you’re continuing directly from the previous sections; you’ve already done this!):
+
+export LD_LIBRARY_PATH="/opt/nvidia/hpc_sdk/Linux_x86_64/21.9/cuda/lib64:${LD_LIBRARY_PATH}"
+We’ll need to add MSCCL’s libraries too:
+
+export LD_LIBRARY_PATH=msccl/build/lib/:$LD_LIBRARY_PATH
+Now we can move on to preparing and running the test. We can use environment variables here:
+
+export NCCL_DEBUG=INFO
+export NCCL_DEBUG_SUBSYS=INIT,ENV
+export MSCCL_XML_FILES=test.xml
+export NCCL_ALGO=MSCCL,RING,TREE
+To actually run the test, we can use mpirun. There are many flags that can be configured depending on the cluster/machine you’re running the test on:
+
+# MPI flags:
+# -np = Number of copies to run on each node
+#
+# NCCL-tests flags:
+# --minbytes, -b = Minimum size to start with (sizes to scan)
+# --maxbytes, -e = Maximum size to end at (sizes to scan)
+# --stepfactor, -f = Multiplication factor between sizes
+# --ngpus, -g = Number of GPUs per thread
+# --check, -c = Check correctess of results (slow when using many GPUs)
+# --iters, -n = Number of iterations
+# --warmup_iters, -w = Number of warmup iterations (not timed)
+# --cudagraph, -G = Capture iterations as a CUDA graph then replay <specified> number of times
+# --blocking, -z = Make NCCL collective blocking (i.e. CPUs wait andd sync after each collective)
+
+mpirun -np 1 nccl-tests/build/all_reduce_perf \
+        --minbytes 128 \
+        --maxbytes 32MB \
+        --stepfactor 2 \
+        --ngpus 1 \
+        --check 1 \
+        --iters 100 \
+        --warmup_iters 100 \
+        --cudagraph 100 \
+        --blocking 0
+You should see the test run and give you an output. You have successfully run MSCCL!
+
+// EOT

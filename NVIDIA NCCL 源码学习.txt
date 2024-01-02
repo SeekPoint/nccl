@@ -1,3 +1,10 @@
+NVIDIA NCCL 源码学习（十一）- ring allreduce
+https://blog.csdn.net/KIDGIN7439/article/details/133313791  ===TBD
+
+NVIDIA NCCL 源码学习（十二）- double binary tree
+https://blog.csdn.net/kidgin7439/article/details/135102930
+
+
 https://blog.csdn.net/kidgin7439/category_11998768.html  和知乎同名的
 
 NVIDIA NCCL 源码学习（十）- 多机间ncclSend和ncclRecv的过程

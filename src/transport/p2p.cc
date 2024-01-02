@@ -8,7 +8,7 @@
 #include "graph.h"
 #include "utils.h"
 
-p2p场景rank之间交换的connectInfo如下所示
+//p2p场景rank之间交换的connectInfo如下所示
 struct p2pConnectInfo {
   int direct; // 是否为同进程
   int read;  // 是否支持p2p read

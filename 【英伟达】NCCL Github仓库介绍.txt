@@ -1,0 +1,61 @@
+【英伟达】NCCL Github仓库介绍
+
+https://zhuanlan.zhihu.com/p/609124278
+
+
+NCCL
+优化了 GPU 间通信的原语。
+
+介绍
+NCCL（发音为“Nickel”）是一个独立的 GPU 标准通信例程库，实现全归约、全聚集、归约、广播、归约分散以及任何基于发送/接收的通信模式。它经过优化，可在使用 PCIe、NVLink、NVswitch 的平台以及使用 InfiniBand Verbs 或 TCP/IP 套接字的网络上实现高带宽。NCCL 支持在单个节点或跨多个节点安装任意数量的 GPU，并且可用于单进程或多进程（例如 MPI）应用程序。
+
+有关 NCCL 使用的更多信息，请参阅NCCL 文档。
+
+Build
+注意：NCCL 的官方和测试版本可以从以下网址下载： https: //developer.nvidia.com/nccl。如果您选择使用官方Build，则可以跳过以下Build步骤。
+
+Build库：
+
+$ cd nccl
+$ make -j src.build
+如果 CUDA 未安装在默认的 /usr/local/cuda 路径中，您可以使用以下命令定义 CUDA 路径：
+
+$ make src.build CUDA_HOME=<path to cuda install>
+build/除非BUILDDIR设置，否则将编译和安装 NCCL 。
+
+默认情况下，NCCL 是为所有支持的体系结构编译的。为了加速编译并减少二进制文件的大小，可以考虑重新定义NVCC_GENCODE（defined in makefiles/common.mk）以仅包含目标平台的架构：
+
+$ make -j src.build NVCC_GENCODE="-gencode=arch=compute_70,code=sm_70"
+安装
+要在系统上安装 NCCL，请创建一个包，然后以 root 身份安装它。
+
+Debian/Ubuntu：
+
+$ # Install tools to create debian packages
+$ sudo apt install build-essential devscripts debhelper fakeroot
+$ # Build NCCL deb package
+$ make pkg.debian.build
+$ ls build/pkg/deb/
+RedHat/CentOS：
+
+$ # Install tools to create rpm packages
+$ sudo yum install rpm-build rpmdevtools
+$ # Build NCCL rpm package
+$ make pkg.redhat.build
+$ ls build/pkg/rpm/
+与操作系统无关的压缩包：
+
+$ make pkg.txz.build
+$ ls build/pkg/txz/
+测试
+NCCL 的测试在https://github.com/nvidia/nccl-tests上单独维护。
+
+$ git clone https://github.com/NVIDIA/nccl-tests.git
+$ cd nccl-tests
+$ make
+$ ./build/all_reduce_perf -b 8 -e 256M -f 2 -g <ngpus>
+参考资料：https://github.com/nvidia/nccl
+
+更多精彩内容，请关注微信公众号"网络技术风云汇"或访问http://www.ngdcn.com。您的点赞和关注是最大的支持！
+
+编辑于 2023-02-24 22:15・IP 属地江苏
