@@ -1,0 +1,3 @@
+NCCL（NVIDIA Collective Communication Library）的来龙去脉
+
+https://zhuanlan.zhihu.com/p/667221519

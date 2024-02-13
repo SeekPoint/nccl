@@ -1,0 +1,2 @@
+nccl-fastsocket加速分析
+https://zhuanlan.zhihu.com/p/504878087

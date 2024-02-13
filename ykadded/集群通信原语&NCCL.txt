@@ -1,0 +1,2 @@
+集群通信原语&NCCL
+https://zhuanlan.zhihu.com/p/661538883

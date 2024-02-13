@@ -1,0 +1,149 @@
+nccl-tests 测试编译！！
+amd00@MZ32-00:~/yk_repo/NCCL/nccl-tests$ make CUDA_HOME=/usr/local/cuda-11.7 NCCL_HOME=/home/amd00/yk_repo/NCCL/nccl
+make -C src build BUILDDIR=/home/amd00/yk_repo/NCCL/nccl-tests/build
+---
+
+amd00@MZ32-00:~/yk_repo/NCCL/nccl-tests$ rm -rf build/
+amd00@MZ32-00:~/yk_repo/NCCL/nccl-tests$ make MPI=1 MPI_HOME=/usr/local/mpi CUDA_HOME=/usr/local/cuda-11.7 NCCL_HOME=/home/amd00/yk_repo/NCCL/nccl
+
+
+amd00@MZ32-00:~/yk_repo/NCCL/nccl-tests$ ./build/all_reduce_perf -b 8 -e 128M -f 2 -g 3
+== 3GPUS
+
+
+
+
+
+
+
+
+
+
+
+
+
++++++++++++
+
+nccl-test 使用指引原创=============https://cloud.tencent.com/developer/article/2361710
+修改于 2023-11-22 11:32:43
+1.7K2
+举报
+文章被收录于专栏：腾讯云网络专家服务
+概述
+nccl-test 工具是 nvidia 开源的一项用于测试 NCCL 集合通信的工具。可以用于检测集合通信是否正常、压测集合通信速率。官方开源地址：https://github.com/NVIDIA/nccl-tests
+
+目前已经支持的测试方法：
+
+all_gather_perf：测试 all-gather 操作的性能。在 all-gather 操作中，每个节点都有一个值，然后这些值被收集到一个列表中，然后这个列表被发送回所有的节点。
+all_reduce_perf：测试 all-reduce 操作的性能。在 all-reduce 操作中，所有的节点都有一个输入值，然后这些值被归约（例如，通过求和或者求最大值）成一个单一的值，然后这个值被发送回所有的节点。
+alltoall_perf：测试 all-to-all 操作的性能。在 all-to-all 操作中，每个节点都发送一个值给所有其他的节点，并从所有其他的节点接收一个值。
+broadcast_perf：测试 broadcast 操作的性能。在 broadcast 操作中，一个节点有一个值，然后这个值被发送到所有其他的节点。
+gather_perf：测试 gather 操作的性能。在 gather 操作中，每个节点都有一个值，然后这些值被收集到一个列表中，然后这个列表被发送到一个指定的节点。
+hypercube_perf：测试 hypercube 通信模式的性能。在 hypercube 通信模式中，节点被组织成一个超立方体的结构，然后在这个结构中进行通信。
+reduce_perf：测试 reduce 操作的性能。在 reduce 操作中，所有的节点都有一个输入值，然后这些值被归约成一个单一的值，然后这个值被发送到一个指定的节点。
+reduce_scatter_perf：测试 reduce-scatter 操作的性能。在 reduce-scatter 操作中，所有的节点都有一个输入值，然后这些值被归约成一个单一的值，然后这个值被分散到所有的节点。
+scatter_perf：测试 scatter 操作的性能。在 scatter 操作中，一个节点有一个列表的值，然后这些值被分散到所有其他的节点。
+sendrecv_perf：测试 point-to-point 通信的性能。
+编译与安装
+安装依赖，nccl-test 依赖 nccl, cuda, mpi：
+nccl & cuda: https://developer.nvidia.com/nccl/nccl-download
+openmpi: https://www.open-mpi.org/software/ompi/v4.1/
+下载源码： git clone https://github.com/NVIDIA/nccl-tests.git
+编译（根据需要可以指定 CUDA地址，NCCL地址。默认情况下，无需指定，需要设置 MPI=1，开启 MPI支持）
+make -j40 MPI=1 MPI_HOME=/path/to/mpi CUDA_HOME=/path/to/cuda NCCL_HOME=/path/to/nccl
+编译完成后，build目录会生成如下二进制文件
+编译结果
+编译结果
+根据需要，可以将 build 目录添加之 PATH 环境变量，或者 建立软链，方便快速访问。
+
+运行测试
+在单台服务器上，可以使用 ./build/all_reduce_perf -b 8 -e 128M -f 2 -g 8启动测试
+命令说明：8 张 GPU (-g 8)执行 all_reduce操作，数据量从 8B(-b 8) 到 128M(-e 128M), 数据量每次翻倍（-f 2）
+通过 MPI 方式执行：mpirun -np 8 ./build/all_reduce_perf -b 8 -e 128M -f 2 -g 1
+命令说明：8个进程（-np 8）,每个进程一张 GPU(-g 1)，执行 all_reduce操作
+注意：使用 MPI方式启动时，请确保可执行文件所在位置在每台机器上相同，或者都在 PATH 路径中
+ 使用示例：
+
+# 2台机器，16 张 GPU卡，执行 all_reduce_perf 测试
+ mpirun -np 16 \
+        -H 172.16.2.8:8,172.16.2.13:8 \
+        --allow-run-as-root -bind-to none -map-by slot \
+        -x NCCL_DEBUG=INFO \
+        -x NCCL_IB_GID_INDEX=3 \
+        -x NCCL_IB_DISABLE=0 \
+        -x NCCL_SOCKET_IFNAME=eth0 \
+        -x NCCL_NET_GDR_LEVEL=2 \
+        -x NCCL_IB_QPS_PER_CONNECTION=4 \
+        -x NCCL_IB_TC=160 \
+        -x LD_LIBRARY_PATH -x PATH \
+        -mca coll_hcoll_enable 0 -mca pml ob1 -mca btl_tcp_if_include eth0 -mca btl ^openib \
+        all_reduce_perf -b 32M -e 1G -i 1000 -f 2 -g 1
+复制
+指令详解：
+
+mpirun 是一个用于启动和管理 MPI（消息传递接口）程序的实用程序。它允许您在单个节点或多个节点上并行运行程序。
+-np <num>：指定要运行的进程数。这应该与您要使用的总 GPU 数量相匹配。例如，如果您有 2 台机器，每台机器有 8 个 GPU，您应该使用 -np 16.
+-H host列表，: 后指定每台机器要用的 GPU数量
+--bind-to none：此选项告诉 MPI 不要将进程绑定到特定的 CPU 核心。这在某些情况下可能会提高性能。
+-x <VARNAME>：将环境变量传递给 MPI 程序。
+--allow-run-as-root：这个选项允许 mpirun 以 root 用户身份运行。通常，出于安全考虑，mpirun 不允许以 root 用户身份运行。
+-map-by slot 表示任务会按照 slot 的顺序分配到节点上。
+-x NCCL_DEBUG=INFO：这个选项设置了 NCCL 的调试级别为 INFO。
+-x NCCL_IB_GID_INDEX=3：这个选项设置了 InfiniBand 网络的 GID 索引为 3。
+-x NCCL_IB_DISABLE=0：这个选项表示不禁用 InfiniBand 网络。
+-x NCCL_SOCKET_IFNAME=eth0：这个选项指定了 NCCL 使用 eth0 网络接口进行通信。
+-x NCCL_NET_GDR_LEVEL=2：这个选项设置了 GPU Direct RDMA 的级别为 2。
+-x NCCL_IB_QPS_PER_CONNECTION=4：这个选项设置了每个连接的队列对数为 4。
+-x NCCL_IB_TC=160：这个选项设置了 InfiniBand 的流量类别为 160。
+-x LD_LIBRARY_PATH -x PATH：这些选项将当前 shell 的 LD_LIBRARY_PATH 和 PATH 环境变量传递给 mpirun。
+all_reduce_perf 表示执行的是 all reduce 操作
+nccl-test 结果
+nccl-test 结果
+
+结果详解：
+
+size (B)：操作处理的数据的大小，以字节为单位。在这个例子中，第一次操作处理了 33554432 字节（约 32MB）的数据，第二次操作处理了 133554432 字节（约 127MB）的数据。
+count (elements)：操作处理的元素的数量。在这个例子中，第一次操作处理了 8388608 个元素，第二次操作处理了 33388608 个元素。
+type：元素的数据类型。在这个例子中，元素的数据类型是 float。
+redop：使用的归约操作。在这个例子中，使用的归约操作是 sum（求和）。
+root：对于某些操作（如 reduce 和 broadcast），这列指定了根节点的编号。在这个例子中，这列的值是 -1，这表示这个操作没有根节点（这是因为 all-reduce 操作涉及到所有的节点）。
+time (us)：操作的执行时间，以微秒为单位。这个列有两个值，分别表示两次不同的测量结果。
+algbw (GB/s)：算法带宽，以每秒吉字节（GB/s）为单位。这个列有两个值，分别表示两次不同的测量结果。
+busbw (GB/s)：总线带宽，以每秒吉字节（GB/s）为单位。这个列有两个值，分别表示两次不同的测量结果。
+wrong：错误的数量。如果这个值不是 0，那么这可能表示有一些错误发生。
+在这个例子中，你可以看到，当处理的数据量增大时，算法带宽和总线带宽都有所提高，这可能表示 NCCL 能够有效地利用大量的数据。
+
+查看结果时，需要关注如下几点：
+
+数据量增加时，带宽是否会下降。（下降明显不符合预期）
+更关注带宽的峰值，每次算到的带宽峰值，可以只用关注 in 或者 out。
+平均值，在数据量递增的情况下，可能无法体检最终的结果。
+请确保数据量足够大，可以压到带宽上限。（可以调整 b, e 或者 n 选项）
+常用参数及解释
+GPU 数量
+-t,--nthreads <num threads> 每个进程的线程数量配置， 默认 1
+ -g,--ngpus <GPUs per thread> 每个线程的 GPU数量，默认 1.
+数据大小配置
+-b,--minbytes <min size in bytes> 开始的最小数据量，默认32M
+-e,--maxbytes <max size in bytes> 结束的最大数据量，默认 32M.
+ 数据步长设置
+ -i,--stepbytes <increment size> 每次增加的数据量. 默认: 1M.
+ -f,--stepfactor <increment factor> 每次增加的倍数. 默认禁用.
+NCCL 操作相关配置
+-o,--op <sum/prod/min/max/avg/all>指定那种操作为reduce，仅适用于Allreduce、Reduce或ReduceScatter等缩减操作。默认值为：求和（Sum）。
+-d,--datatype <nccltype/all>指定使用哪种数据类型. 默认 : Float.
+-r,--root <root/all>指定使用哪个 root 用户，默认0.
+性能相关配置
+-n,--iters <iteration count> 每次操作（一次发送）循环多少次. 默认 : 20.
+-w,--warmup_iters <warmup iteration count> 预热迭代次数（不计时）。默认值为：5。
+-m,--agg_iters <aggregation count> 每次迭代中要聚合在一起的操作数。默认值为：1
+-a,--average <0/1/2/3> 在所有ranks计算均值作为最终结果 (MPI=1 only). <0=Rank0,1=Avg,2=Min,3=Max>. 默认为 1.
+测试相关配置
+-p,--parallel_init <0/1> 使用线程并行初始化 NCCL, 默认 : 0.
+-c,--check <0/1> 检查结果的正确性。在大量GPU上可能会非常慢。默认值为：1
+-z,--blocking <0/1> 使NCCL集合阻塞，即在每个集合之后让CPU等待和同步。默认值为：0。
+-G,--cudagraph <num graph launches>  将迭代作为CUDA图形捕获，然后重复指定的次数。默认值为：0。
+常见问题
+1. 如何实现持续运行 nccl-test
+
+可以通过，使用 `-b`, `-e`选项将数据量设置为一致的，使用`-i 0`将每次增加的数据步长设置为 0，就可以实现持续运行该数据大小的 nccl-test 测试。

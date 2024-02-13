@@ -1,0 +1,14 @@
+魔改 NCCL
+
+作者：方佳瑞
+链接：https://www.zhihu.com/question/598730156/answer/3187578933
+来源：知乎
+著作权归作者所有。商业转载请联系作者获得授权，非商业转载请注明出处。
+
+在大模型训练过程中，通信性能和稳定性非常关键。因此如何正确使用NCCL非常关键。
+鉴于大部分使用者只能把NCCL当黑盒用，环境变量是控制NCCL能力的唯一手段。
+这篇文章介绍6个我用到的环境变量的经验配置，供大家参考。
+掌握更全面NCCL使用技巧还请阅读官方文档https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/overview.html
+
+NCCL_IB_HCA该变量指定要用于通信的 RDMA 接口。使用IB通信必须要设置的。
+用法：定义一个前缀列表来过滤要由 NCCL 使用的接口。使用 ^ 符号，NCCL 将排除以列表中任何前缀开头的接口。还可以使用 : 符号来指定特定的端口。要匹配（或不匹配）确切的接口名称而不是前缀，在字符串前面加上 = 字符。示例：mlx5：使用以 mlx5 开头的所有卡的所有端口。=mlx5_0:1,mlx5_1:1：使用卡 mlx5_0 和 mlx5_1 的端口 1。^=mlx5_1：不使用卡 mlx5_1。注意：如果不加前缀 =，使用 mlx5_1 将同时选择 mlx5_1 和 mlx5_10 到 mlx5_19（如果存在）。因此，始终建议添加前缀 = 以确保精确匹配。使用建议：通过这个环境变量可以调整NIC（Network Interface Controller）数量，NIC 通常是一块插入计算机主板上的扩展卡，更多NIC，节点带宽更大。通过控制NIC数量可以控制节点间通信带宽。比如： NCCL_IB_HCA=mlx5_0:1,mlx5_1:1,mlx5_2:1,mlx5_3:1,mlx5_6:1,mlx5_7:1,mlx5_8:1,mlx5_9:11 NIC: mlx5_0:1 2 NIC: mlx5_0:1,mlx5_6:1 4 NIC: mlx5_0:1,mlx5_4:1,mlx5_6:1,mlx5_10:1 8 NIC: mlx5_0:1,mlx5_1:1,mlx5_4:1,mlx5_5:1,mlx5_6:1,mlx5_7:1,mlx5_10:1,mlx5_11:1NCCL_PXN_DISABLE禁用使用非本地 NIC 的节点间通信，使用 NVLink 和一个中间 GPU。使用建议：设置成1。在PyTorch中进行跨节点all-to-all通信时，如果该环境变量是0会出现异常。NCCL_IB_TIMEOUT改变量用于控制InfiniBand Verbs超时。取值范围1-22。超时时间的计算公式为4.096微秒 * 2 ^ timeout，正确的值取决于网络的大小。增加该值可以在非常大的网络上提供帮助，例如，如果NCCL在调用ibv_poll_cq时出现错误12。使用建议：在大模型训练任务中设置成最大值22，可以减少不少nccl timeout异常。NCCL_IB_RETRY_CNT变量控制 InfiniBand 的重试次数。使用建议在大模型训练任务中设置成13，尽可能多重试。NCCL_DEBUG_FILE设置一个文件地址，变量用于将NCCL的调试日志输出到文件中。有助于调试nccl。NCCL_IB_PCI_RELAXED_ORDERING启用 IB Verbs 传输的Relaxed Ordering。Relaxed Ordering可以极大地提高虚拟化环境下 InfiniBand 网络的性能。传统的顺序执行（Strict Ordering）要求数据在发送和接收之间按照严格的顺序进行传输和处理。这种机制可以确保数据的顺序性，但可能会导致性能瓶颈，特别是在高负载和复杂通信模式下。而放松顺序允许数据在发送和接收之间进行乱序传输和处理。这意味着系统可以更灵活地调度和处理数据，提高并行性和吞吐量。放松顺序机制在虚拟化环境中尤其有益，因为它可以减少虚拟机之间的争用和延迟，提高整体性能。接受的取值： 设置为 2，如果可用，自动使用Relaxed Ordering。设置为 1，强制使用Relaxed Ordering，如果不可用则失败。设置为 0，禁用使用Relaxed Ordering。默认值为 2。建议：设置成1发布于 2023-08-29 11:30・IP 属地北京

@@ -1,0 +1,75 @@
+
+
+大坑：
+不要、尽量避免 从PC机或者其他地方复制项目文件，可能导致权限问题，
+(base) amd00@MZ32-00:~/yk_repo/NCCL/nccl$
+make -j src.build NVCC_GENCODE="-gencode=arch=compute_75,code=sm_75"
+make clean
+本项目中，由于复制的文件属性问题，导致某个gen.sh无法正常运行，即使sudo也会导致其他问题！！！！
+
+make pkg.debian.build
+
+ls build/pkg/deb/
+
+
+
+(base) amd00@MZ32-00:~/yk_repo/nccl-tests$ make -j8
+
+(base) amd00@MZ32-00:~/yk_repo/nccl-tests$ ./build/all_reduce_perf -b 8 -e 256M -f 2 -g 3
+# nThread 1 nGpus 3 minBytes 8 maxBytes 268435456 step: 2(factor) warmup iters: 5 iters: 20 agg iters: 1 validation: 1 graph: 0
+#
+# Using devices
+#  Rank  0 Group  0 Pid  60766 on    MZ32-00 device  0 [0x41] NVIDIA GeForce RTX 2080 Ti
+#  Rank  1 Group  0 Pid  60766 on    MZ32-00 device  1 [0x81] NVIDIA GeForce RTX 2080 Ti
+#  Rank  2 Group  0 Pid  60766 on    MZ32-00 device  2 [0xc1] NVIDIA GeForce RTX 2080 Ti
+#
+#                                                              out-of-place                       in-place
+#       size         count      type   redop    root     time   algbw   busbw #wrong     time   algbw   busbw #wrong
+#        (B)    (elements)                               (us)  (GB/s)  (GB/s)            (us)  (GB/s)  (GB/s)
+           8             2     float     sum      -1    14.69    0.00    0.00      0    14.40    0.00    0.00      0
+。。。。。。
+   268435456      67108864     float     sum      -1   125030    2.15    2.86      0   124413    2.16    2.88      0
+# Out of bounds values : 0 OK
+# Avg bus bandwidth    : 1.73332
+#
+
+
+
+
+
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+(base) amd00@MZ32-00:~/yk_repo/NCCL/msccl-az/executor/msccl-executor-nccl$ make -j16 src.build
+
+
+(base) amd00@MZ32-00:~/yk_repo/NCCL/msccl-az/tests/msccl-tests-nccl$
+make MPI=1 MPI_HOME=/usr/local/mpi CUDA_HOME=/usr/local/cuda NCCL_HOME=$HOME/yk_repo/NCCL/msccl/executor/msccl-executor-nccl/build/ -j
+
+for nccl:
+$ CXX=/usr/local/cuda-11.7/bin/nvcc BIN_HOME=/home/amd00/yk_repo/NCCL/nccl/build/lib/ SRC_HOME=/home/amd00/yk_repo/NCCL/nccl make
+for rccl:
+$ CXX=/path/to/nvcc BIN_HOME=/path/to/nccl/binary SRC_HOME=/path/to/nccl/source make PLATFORM=RCCL
+
+首先要
+cd executor/msccl-executor-nccl/
+make
+make install
+
+实际是，这里很容易误解
+CXX=/usr/local/cuda-11.7/bin/nvcc BIN_HOME=/home/amd00/yk_repo/NCCL/msccl/executor/msccl-executor-nccl/build/lib/ SRC_HOME=/home/amd00/yk_repo/NCCL/msccl/executor/msccl-executor-nccl make
+
+$ make install
+
++++++++++++++++++++++++++++++++
+
+
+(base) amd00@MZ32-00:~/yk_repo/NCCL/nccl-examples/build$
+2005  mkdir build
+ 2006  cd build/
+ 2007  cmake ..
+ 2008  make
+====passed
+
+
+
++++++++++++++++++++++++++++++++++++++++++++

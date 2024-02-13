@@ -1,0 +1,54 @@
+export NCCL_IB_DISABLE=1; export NCCL_P2P_DISABLE=1; NCCL_DEBUG=INFO 含义
+
+这些是环境变量的设置命令，用于配置 NVIDIA Collective Communications Library (NCCL)的运行参数。具体来说：
+
+export NCCL_IB_DISABLE=1:禁用 InfiniBand(一种高速网络通信协议)支持。这意味着 NCCL 将不会使用 InfiniBand 进行通信，而是使用其他可用的通信方式。
+export NCCL_P2P_DISABLE=1:禁用点对点通信支持。这意味着 NCCL 将不会使用点对点通信进行跨设备之间的通信，而是使用其他可用的通信方式。
+NCCL_DEBUG=INFO:设置 NCCL 的调试级别为 INFO。这将输出一些信息级别的调试日志，帮助开发人员了解 NCCL 的运行情况和问题所在。
+————————————————
+版权声明：本文为CSDN博主「800问」的原创文章，遵循CC 4.0 BY-SA版权协议，转载请附上原文出处链接及本声明。
+原文链接：https://blog.csdn.net/weixin_56515806/article/details/132055753
+
+
+
+pytorch多机训练
+
+ygfrancois
+
+于 2022-06-15 22:44:07 发布
+设置环境变量
+
+export NCCL_P2P_DISABLE=1
+export NCCL_IB_DISABLE=1
+export NCCL_DEBUG=info
+export NCCL_SOCKET_IFNAME=eth0
+
+训练参考：https://github.com/open-mmlab/mmaction2/blob/master/tools/dist_train.sh
+————————————————
+版权声明：本文为CSDN博主「ygfrancois」的原创文章，遵循CC 4.0 BY-SA版权协议，转载请附上原文出处链接及本声明。
+原文链接：https://blog.csdn.net/ygfrancois/article/details/124888926
+
+
+
+amd00@MZ32-00:~/yk_repo/cuda-samples/Samples$ nvidia-smi topo -m
+        GPU0    GPU1    GPU2    NIC0    CPU Affinity    NUMA Affinity
+GPU0     X      SYS     NV2     SYS     0-31            N/A
+GPU1    SYS      X      SYS     PHB     0-31            N/A
+GPU2    NV2     SYS      X      SYS     0-31            N/A
+NIC0    SYS     PHB     SYS      X
+
+Legend:
+
+  X    = Self
+  SYS  = Connection traversing PCIe as well as the SMP interconnect between NUMA nodes (e.g., QPI/UPI)
+  NODE = Connection traversing PCIe as well as the interconnect between PCIe Host Bridges within a NUMA node
+  PHB  = Connection traversing PCIe as well as a PCIe Host Bridge (typically the CPU)
+  PXB  = Connection traversing multiple PCIe bridges (without traversing the PCIe Host Bridge)
+  PIX  = Connection traversing at most a single PCIe bridge
+  NV#  = Connection traversing a bonded set of # NVLinks
+
+NIC Legend:
+
+  NIC0: mlx5_0
+
+amd00@MZ32-00:~/yk_repo/cuda-samples/Samples$

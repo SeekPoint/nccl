@@ -1,0 +1,8 @@
+MPI只创建通信域，给所有计算进程编号。NCCL负责GPU聚合通信的具体最佳实现。
+有了NCCL，还是要给进程编号，确定进程角色。这不在NCCL这个NVIDIA Collective Commulication Libraries职责范围中，所以要MPI来配合完成。
+编辑于 2021-06-22 18:39
+
+作者：小猪猪
+链接：https://www.zhihu.com/question/465346770/answer/1954733017
+来源：知乎
+著作权归作者所有。商业转载请联系作者获得授权，非商业转载请注明出处。
